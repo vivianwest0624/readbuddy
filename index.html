@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ReadBuddy｜朗讀夥伴</title>
+    <!-- Tailwind CDN for quick styling (Route A: zero-build) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="min-h-screen bg-slate-50">
+    <div id="root"></div>
+
+    <!-- React 18 UMD + Babel (to run JSX directly in the browser) -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="text/babel">
+      // ========================
+      // ReadBuddy｜朗讀夥伴 (merged main + vocabulary, Route A)
+      // ========================
+
+      // ----- Constants -----
+      const RATE_MIN = 0.25; // 支援到超慢 0.25×（慢速 2 倍）
+      const RATE_MAX = 2.0;
+      const RATE_ABS_MAX = 2.5; // 安全上限（不同瀏覽器實作略有差異）
+
+      function App() {
+        // ---------- Safe storage helpers (avoid SSR / privacy errors) ----------
+        const storage = React.useMemo(
+          () => ({
+            get(key, fallback = "") {
+              try {
+                if (typeof localStorage === "undefined") return fallback;
+                const v = localStorage.getItem(key);
+                return v == null ? fallback : v;
+              } catch (_) {
+                return fallback;
+              }
+            },
+            set(key, value) {
+              try {
+                if (typeof localStorage !== "undefined") localStorage.setItem(key, value);
+              } catch (_) {}
+            },
+          }),
+          []
+        );
+
+        // ---------- State ----------
+        const [text, setText] = React.useState("");
+        const [rate, setRate] = React.useState(() => {
+          const saved = parseFloat(storage.get("tts_rate", "1.0"));
+          return Number.isFinite(saved) ? saved : 1.0;
+        });
+        const [voices, setVoices] = React.useState([]);
+        const [voiceURI, setVoiceURI] = React.useState(() => storage.get("tts_voiceURI", ""));
+        const [status, setStatus] = React.useState("idle"); // idle | speaking | paused
+        const [currentIndex, setCurrentIndex] = React.useState(-1);
+        const [testRuns, setTestRuns] = React.useState(null);
+        const queueRef = React.useRef([]); // utterances queue (article)
+        const cancelledRef = React.useRef(false);
+
+        // For syncing highlight into view (article preview)
+        const chunkRefs = React.useRef([]);
+
+        // Vocabulary state
+        const [vocab, setVocab] = React.useState(() => {
+          try {
+            const raw = storage.get("tts_vocab", "[]");
+            const arr = JSON.parse(raw);
+            return Array.isArray(arr) ? arr : [];
+          } catch {
+            return [];
+          }
+        });
+        const [termInput, setTermInput] = React.useState("");
+        const [defInput, setDefInput] = React.useState("");
+        const [repeatAll, setRepeatAll] = React.useState(2); // default: repeat each word 2x
+        const [playDefToo, setPlayDefToo] = React.useState(false);
+
+        // ---------- Env feature detection ----------
+        const supported =
+          typeof window !== "undefined" &&
+          "speechSynthesis" in window &&
+          typeof SpeechSynthesisUtterance !== "undefined";
+
+        // ---------- Effects: load / persist ----------
+        React.useEffect(() => {
+          const savedText = storage.get("tts_text", "");
+          if (savedText) setText(savedText);
+        }, [storage]);
+
+        React.useEffect(() => {
+          storage.set("tts_rate", String(rate));
+        }, [rate, storage]);
+
+        React.useEffect(() => {
+          if (voiceURI) storage.set("tts_voiceURI", voiceURI);
+        }, [voiceURI, storage]);
+
+        React.useEffect(() => {
+          storage.set("tts_text", text);
+        }, [text, storage]);
+
+        React.useEffect(() => {
+          try {
+            storage.set("tts_vocab", JSON.stringify(vocab));
+          } catch {}
+        }, [vocab, storage]);
+
+        // ---------- Voices loader ----------
+        const loadVoices = React.useCallback(() => {
+          if (!supported) return;
+          const list = window.speechSynthesis.getVoices();
+          setVoices(list);
+          if (!voiceURI && list.length) {
+            // Prefer zh-TW, zh-CN, then en-US, else first
+            const prefer =
+              list.find((v) => /zh-TW/i.test(v.lang)) ||
+              list.find((v) => /zh-CN/i.test(v.lang)) ||
+              list.find((v) => /en-US/i.test(v.lang)) ||
+              list[0];
+            if (prefer) setVoiceURI(prefer.voiceURI || prefer.name);
+          }
+        }, [supported, voiceURI]);
+
+        React.useEffect(() => {
+          if (!supported) return;
+          loadVoices();
+          // Some browsers populate voices asynchronously
+          window.speechSynthesis.onvoiceschanged = loadVoices;
+          return () => {
+            if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = null;
+          };
+        }, [supported, loadVoices]);
+
+        // ---------- Utils ----------
+        function countWords(t) {
+          // Basic estimate (works for English). For CJK, approximate by characters/2
+          const latin = (t.match(/\S+/g) || []).length;
+          const cjk = t.replace(/[\x00-\x7F]/g, "").length / 2;
+          return Math.max(latin, Math.round(cjk));
+        }
+
+        function estimateDuration(txt, r) {
+          const words = countWords(txt);
+          const baseWPM = 160; // at rate = 1.0
+          if (!words) return "0:00";
+          const minutes = words / (baseWPM * Math.max(r, RATE_MIN));
+          const totalSec = Math.ceil(minutes * 60);
+          const mm = Math.floor(totalSec / 60);
+          const ss = String(totalSec % 60).padStart(2, "0");
+          return `${mm}:${ss}`;
+        }
+
+        function splitIntoChunks(t) {
+          // Split by sentence enders and new lines, then chunk long sentences
+          const parts = [];
+          const tokens = t
+            .split(/([。！？!?.\n]+)/)
+            .reduce((acc, cur) => {
+              if (/[。！？!?.\n]+/.test(cur) && acc.length) acc[acc.length - 1] += cur;
+              else if (cur.trim()) acc.push(cur.trim());
+              return acc;
+            }, []);
+
+          const MAX_LEN = 180; // keep short for stability across browsers
+          for (const s of tokens) {
+            if (s.length <= MAX_LEN) {
+              parts.push(s);
+            } else {
+              // Soft split at spaces or punctuation
+              let start = 0;
+              while (start < s.length) {
+                let end = Math.min(start + MAX_LEN, s.length);
+                const slice = s.slice(start, end);
+                const back = Math.max(
+                  slice.lastIndexOf(" "),
+                  slice.search(/[，、,;；]/) >= 0 ? slice.search(/[，、,;；](?!.*[，、,;；])/) : -1
+                );
+                if (back > 40) end = start + back + 1;
+                parts.push(s.slice(start, end).trim());
+                start = end;
+              }
+            }
+          }
+          return parts;
+        }
+
+        const getSelectedVoice = React.useCallback(() => {
+          return voices.find((v) => (v.voiceURI || v.name) === voiceURI) || null;
+        }, [voices, voiceURI]);
+
+        // Chunks derived from current text (used for preview + TTS queue)
+        const chunks = React.useMemo(() => splitIntoChunks(text.trim()), [text]);
+
+        // Keep refs array length in sync
+        React.useEffect(() => {
+          chunkRefs.current = chunks.map((_, i) => chunkRefs.current[i] || React.createRef());
+        }, [chunks.length]);
+
+        // Auto scroll active chunk into view
+        React.useEffect(() => {
+          if (currentIndex < 0) return;
+          const el = chunkRefs.current[currentIndex]?.current;
+          if (el && typeof el.scrollIntoView === "function") {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+        }, [currentIndex]);
+
+        // ---------- TTS controls (article) ----------
+        function cancelAll() {
+          if (!supported) return;
+          cancelledRef.current = true;
+          window.speechSynthesis.cancel();
+          queueRef.current = [];
+          setStatus("idle");
+          setCurrentIndex(-1);
+        }
+
+        function speakFromIndex(startIndex = 0) {
+          if (!supported || !text.trim()) return;
+          cancelAll();
+          cancelledRef.current = false;
+
+          // Use current chunks to keep highlight in sync
+          queueRef.current = chunks;
+
+          const voice = getSelectedVoice();
+
+          const speakChunk = (i) => {
+            if (cancelledRef.current) return;
+            if (i >= queueRef.current.length) {
+              setStatus("idle");
+              setCurrentIndex(-1);
+              return;
+            }
+            const utter = new SpeechSynthesisUtterance(queueRef.current[i]);
+            if (voice) utter.voice = voice;
+            utter.rate = Math.min(Math.max(rate, RATE_MIN), RATE_ABS_MAX);
+            utter.pitch = 1.0;
+
+            utter.onstart = () => {
+              setStatus("speaking");
+              setCurrentIndex(i);
+            };
+            utter.onend = () => {
+              setTimeout(() => speakChunk(i + 1), 50);
+            };
+            utter.onerror = () => {
+              setTimeout(() => speakChunk(i + 1), 50);
+            };
+
+            window.speechSynthesis.speak(utter);
+          };
+
+          speakChunk(startIndex);
+        }
+
+        function speak() {
+          speakFromIndex(0);
+        }
+
+        function pause() {
+          if (!supported) return;
+          window.speechSynthesis.pause();
+          setStatus("paused");
+        }
+
+        function resume() {
+          if (!supported) return;
+          window.speechSynthesis.resume();
+          setStatus("speaking");
+        }
+
+        // ---------- TTS helpers (vocabulary) ----------
+        function speakTextsSequence(texts) {
+          if (!supported || !texts.length) return;
+          cancelAll();
+          cancelledRef.current = false;
+          const voice = getSelectedVoice();
+          let i = -1;
+
+        	const next = () => {
+            if (cancelledRef.current) return;
+            i += 1;
+            if (i >= texts.length) {
+              setStatus("idle");
+              return;
+            }
+            const u = new SpeechSynthesisUtterance(texts[i]);
+            if (voice) u.voice = voice;
+            u.rate = Math.min(Math.max(rate, RATE_MIN), RATE_ABS_MAX);
+            u.pitch = 1.0;
+            u.onstart = () => {
+              setStatus("speaking");
+              setCurrentIndex(-1); // not tied to article highlight
+            };
+            u.onend = () => setTimeout(next, 120);
+            u.onerror = () => setTimeout(next, 120);
+            window.speechSynthesis.speak(u);
+          };
+
+          next();
+        }
+
+        function playWord(term, times = 3, withDefinition = false, definition = "") {
+          const texts = [];
+          for (let i = 0; i < times; i++) {
+            texts.push(term);
+            if (withDefinition && definition) texts.push(definition);
+          }
+          speakTextsSequence(texts);
+        }
+
+        function playAllWords(times = repeatAll, withDefinition = playDefToo) {
+          const texts = [];
+          vocab.forEach((it) => {
+            for (let i = 0; i < times; i++) {
+              texts.push(it.term);
+              if (withDefinition && it.definition) texts.push(it.definition);
+            }
+          });
+          speakTextsSequence(texts);
+        }
+
+        // ---------- Vocab utils (pure) ----------
+        function normalizeTerm(t) {
+          return (t || "").trim();
+        }
+
+        function addVocab(term, definition) {
+          const t = normalizeTerm(term);
+          const d = (definition || "").trim();
+          if (!t) return false;
+          setVocab((prev) => {
+            const exists = prev.some((x) => x.term.toLowerCase() === t.toLowerCase());
+            if (exists) {
+              // update definition if provided
+              return prev.map((x) => (x.term.toLowerCase() === t.toLowerCase() ? { ...x, definition: d || x.definition } : x));
+            }
+            return [...prev, { id: Date.now() + Math.random().toString(36).slice(2), term: t, definition: d }];
+          });
+          return true;
+        }
+
+        function removeVocab(id) {
+          setVocab((prev) => prev.filter((x) => x.id !== id));
+        }
+
+        // ---------- Tests (pure functions only) ----------
+        function runTests() {
+          const results = [];
+          // Existing tests (article functions)
+          const chunks1 = splitIntoChunks("Hello world. How are you?");
+          results.push({
+            name: "splitIntoChunks basic EN",
+            pass: chunks1.length === 2 && /[\.!?]$/.test(chunks1[0]) && /[\.!?]$/.test(chunks1[1]),
+            info: JSON.stringify(chunks1),
+          });
+
+          const dur = estimateDuration("one two three four five six", 1.0);
+          results.push({ name: "estimateDuration format", pass: /^\d+:\d{2}$/.test(dur), info: dur });
+
+          const cwEn = countWords("hello world");
+          results.push({ name: "countWords EN", pass: cwEn === 2, info: String(cwEn) });
+
+          const cwCjk = countWords("你好世界");
+          results.push({ name: "countWords CJK approx", pass: cwCjk >= 2, info: String(cwCjk) });
+
+          results.push({ name: "estimateDuration empty", pass: estimateDuration("", 1.0) === "0:00", info: estimateDuration("", 1.0) });
+
+          const chunks2 = splitIntoChunks("第一段\n第二段\n第三段");
+          results.push({ name: "splitIntoChunks newline paragraphs", pass: chunks2.length === 3, info: JSON.stringify(chunks2) });
+
+          // New tests for vocab helpers
+          results.push({ name: "normalizeTerm trims", pass: normalizeTerm("  apple  ") === "apple", info: normalizeTerm("  apple  ") });
+
+          // addVocab dedupe by term (case-insensitive)
+          const localAdd = (arr, term, def) => {
+            const t = (term || '').trim();
+            const d = (def || '').trim();
+            const exists = arr.some((x) => x.term.toLowerCase() === t.toLowerCase());
+            return exists ? arr.map((x) => (x.term.toLowerCase() === t.toLowerCase() ? { ...x, definition: d || x.definition } : x)) : [...arr, { id: 'x', term: t, definition: d }];
+          };
+          let acc = [];
+          acc = localAdd(acc, 'Apple', '蘋果');
+          acc = localAdd(acc, 'apple', '蘋果水果');
+          results.push({ name: "addVocab dedupe update def", pass: acc.length === 1 && /蘋果水果|蘋果/.test(acc[0].definition), info: JSON.stringify(acc) });
+
+          setTestRuns(results);
+        }
+
+        // ---------- Derived ----------
+        const isSpeaking = status === "speaking";
+        const isPaused = status === "paused";
+        const est = estimateDuration(text, rate);
+        const selectedVoice = getSelectedVoice();
+
+        const sampleZh = "你好！這是一個文字轉語音的示例。你可以調整語速，選擇不同的聲音，然後按下播放。祝你使用愉快！";
+        const sampleEn = "Hello! This is a text-to-speech demo. You can adjust the speaking rate, choose a different voice, and then press play. Enjoy!";
+
+        // ---------- UI ----------
+        return (
+          <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 text-slate-800">
+            <div className="max-w-6xl mx-auto p-6">
+              <header className="flex items-center justify-between mb-6">
+                <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">ReadBuddy｜朗讀夥伴</h1>
+                <div className="text-sm text-slate-500">Web Speech API TTS</div>
+              </header>
+
+              {!supported && (
+                <div className="p-4 rounded-xl bg-red-50 text-red-700 border border-red-200 mb-6">
+                  你的瀏覽器目前不支援語音合成（SpeechSynthesis）。建議使用 Chrome / Edge（桌面版）。
+                </div>
+              )}
+
+              {/* Main layout */}
+              <div className="grid gap-4 md:grid-cols-3">
+                {/* Left: Input + Preview */}
+                <div className="md:col-span-2">
+                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <label htmlFor="tts-text" className="font-medium">輸入文字</label>
+                      <div className="text-xs text-slate-500">{text.length} 字 · 預估 {est}</div>
+                    </div>
+                    <textarea
+                      id="tts-text"
+                      data-testid="input-text"
+                      value={text}
+                      onChange={(e) => setText(e.target.value)}
+                      placeholder="貼上或輸入要唸出來的文字…"
+                      className="w-full h-36 md:h-40 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 p-3 resize-vertical bg-slate-50/50"
+                      aria-label="輸入要朗讀的文字"
+                    />
+
+                    {/* Preview with synchronized highlight */}
+                    <div className="mt-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <h2 className="font-medium">預覽（同步高亮）</h2>
+                        <div className="text-xs text-slate-500">段落數：{chunks.length} · 進度：{currentIndex >= 0 ? currentIndex + 1 : 0}/{chunks.length}</div>
+                      </div>
+                      <div className="max-h-64 overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2" data-testid="preview-pane">
+                        {chunks.length === 0 && (
+                          <div className="text-sm text-slate-500">無文字，請在上方輸入內容。</div>
+                        )}
+                        {chunks.map((c, i) => {
+                          const active = i === currentIndex && (isSpeaking || isPaused);
+                          return (
+                            <div
+                              key={i}
+                              ref={chunkRefs.current[i]}
+                              data-active={active ? 'true' : 'false'}
+                              className={`text-sm leading-relaxed rounded-lg border p-2 cursor-pointer select-none ${
+                                active
+                                  ? 'bg-yellow-50 border-yellow-300 ring-2 ring-yellow-200'
+                                  : 'bg-white border-slate-200 hover:bg-slate-50'
+                              }`}
+                              onClick={() => speakFromIndex(i)}
+                              title={active ? '正在朗讀，點擊可從此段重播' : '點擊從這一段開始朗讀'}
+                            >
+                              <span className="opacity-60 mr-2">[{i + 1}]</span>
+                              <span>{c}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        <button
+                          onClick={() => setText(sampleZh)}
+                          className="px-3 py-1.5 text-sm rounded-full bg-slate-100 hover:bg-slate-200"
+                          type="button"
+                        >載入中文示例</button>
+                        <button
+                          onClick={() => setText(sampleEn)}
+                          className="px-3 py-1.5 text-sm rounded-full bg-slate-100 hover:bg-slate-200"
+                          type="button"
+                        >Load English Sample</button>
+                        <button
+                          onClick={() => setText("")}
+                          className="px-3 py-1.5 text-sm rounded-full bg-slate-100 hover:bg-slate-200"
+                          type="button"
+                        >清空</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right: Controls */}
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block font-medium mb-1">語音（Voice）</label>
+                      <select
+                        value={voiceURI}
+                        onChange={(e) => setVoiceURI(e.target.value)}
+                        className="w-full rounded-xl border border-slate-300 p-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                        aria-label="選擇語音"
+                      >
+                        {voices.length === 0 && <option>（正在載入可用語音…）</option>}
+                        {voices.map((v) => (
+                          <option key={v.voiceURI || v.name} value={v.voiceURI || v.name}>
+                            {v.name} — {v.lang}
+                          </option>
+                        ))}
+                      </select>
+                      {selectedVoice && (
+                        <div className="mt-1 text-xs text-slate-500">目前：{selectedVoice.name}（{selectedVoice.lang}）</div>
+                      )}
+                    </div>
+
+                    <div>
+                      <label htmlFor="rate" className="block font-medium mb-1">語速（{rate.toFixed(2)}×）</label>
+                      <input
+                        id="rate"
+                        data-testid="slider-rate"
+                        type="range"
+                        min={RATE_MIN}
+                        max={RATE_MAX}
+                        step={0.05}
+                        value={rate}
+                        onChange={(e) => setRate(parseFloat(e.target.value))}
+                        className="w-full"
+                        aria-label="調整語速"
+                      />
+                      <div className="flex justify-between text-xs text-slate-500">
+                        <span>更慢（{RATE_MIN}×）</span>
+                        <span>更快（{RATE_MAX}×）</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        <button onClick={() => setRate(0.25)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">超慢 0.25×</button>
+                        <button onClick={() => setRate(0.5)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">慢速×2（0.5×）</button>
+                        <button onClick={() => setRate(1.0)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">正常 1.0×</button>
+                        <button onClick={() => setRate(1.5)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">1.5×</button>
+                        <button onClick={() => setRate(2.0)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">2.0×</button>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 pt-2">
+                      <button
+                        onClick={speak}
+                        disabled={!supported || !text.trim()}
+                        className="flex-1 px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                        data-testid="btn-play"
+                        aria-label="開始朗讀"
+                      >▶️ 朗讀</button>
+                      {isSpeaking ? (
+                        <button onClick={pause} className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200" aria-label="暫停朗讀">⏸ 暫停</button>
+                      ) : isPaused ? (
+                        <button onClick={resume} className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200" aria-label="繼續朗讀">⏯ 繼續</button>
+                      ) : (
+                        <button disabled className="px-4 py-2 rounded-xl bg-slate-50 text-slate-400 border border-slate-200" aria-disabled>
+                          ⏸ 暫停
+                        </button>
+                      )}
+                      <button onClick={cancelAll} className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200" aria-label="停止朗讀">⏹ 停止</button>
+                    </div>
+
+                    {(isSpeaking || isPaused) && (
+                      <div className="text-xs text-slate-500">進度：{currentIndex + 1}/{chunks.length}</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Vocabulary Section */}
+              <div className="mt-6 bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="font-medium">單字與解釋（Vocabulary）</h2>
+                  <div className="flex items-center gap-2 text-sm">
+                    <label className="inline-flex items-center gap-1">
+                      <input type="checkbox" className="accent-indigo-600" checked={playDefToo} onChange={(e) => setPlayDefToo(e.target.checked)} />
+                      <span>一起唸出解釋</span>
+                    </label>
+                    <label className="inline-flex items-center gap-1">
+                      <span>每個重複</span>
+                      <select value={repeatAll} onChange={(e) => setRepeatAll(parseInt(e.target.value))} className="border rounded px-1 py-0.5">
+                        <option value={1}>1x</option>
+                        <option value={2}>2x</option>
+                        <option value={3}>3x</option>
+                        <option value={5}>5x</option>
+                      </select>
+                    </label>
+                    <button onClick={() => playAllWords(repeatAll, playDefToo)} className="px-3 py-1.5 rounded-full bg-indigo-600 text-white hover:bg-indigo-700">▶️ 全部播放</button>
+                  </div>
+                </div>
+
+                {/* Add row */}
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                  <input
+                    value={termInput}
+                    onChange={(e) => setTermInput(e.target.value)}
+                    placeholder="單字（必填）"
+                    className="md:col-span-2 rounded-lg border border-slate-300 p-2 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    aria-label="單字"
+                  />
+                  <input
+                    value={defInput}
+                    onChange={(e) => setDefInput(e.target.value)}
+                    placeholder="解釋（選填）"
+                    className="md:col-span-2 rounded-lg border border-slate-300 p-2 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    aria-label="解釋"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const ok = addVocab(termInput, defInput);
+                      if (ok) { setTermInput(""); setDefInput(""); }
+                    }}
+                    className="rounded-lg border border-slate-300 px-3 py-2 bg-slate-100 hover:bg-slate-200"
+                  >新增</button>
+                </div>
+
+                {/* List */}
+                <div className="mt-3 divide-y divide-slate-200">
+                  {vocab.length === 0 ? (
+                    <div className="text-sm text-slate-500">尚未新增任何單字。先在上方輸入單字與解釋，再按「新增」。</div>
+                  ) : (
+                    vocab.map((item) => (
+                      <div key={item.id} className="py-2 flex items-center gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium truncate">{item.term}</div>
+                          {item.definition && <div className="text-sm text-slate-600 truncate">{item.definition}</div>}
+                        </div>
+                        <div className="flex items-center gap-2 text-sm">
+                          <button onClick={() => playWord(item.term, 1, false, item.definition)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">▶️ 1x</button>
+                          <button onClick={() => playWord(item.term, 3, false, item.definition)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">🔁 3x</button>
+                          <button onClick={() => playWord(item.term, 5, false, item.definition)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">🔁 5x</button>
+                          <button onClick={() => playWord(item.term, 1, true, item.definition)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200" title="播放 單字 + 解釋">詞+解釋</button>
+                          <button onClick={() => removeVocab(item.id)} className="px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-red-700 border border-red-200">刪除</button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-6 bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+                <h2 className="font-medium mb-2">使用說明</h2>
+                <ul className="list-disc list-inside text-sm text-slate-600 space-y-1">
+                  <li>貼上文字，選擇喜歡的「語音」，拖曳調整「語速」，按「朗讀」。</li>
+                  <li>預覽區會顯示自動分段的段落，朗讀時會同步高亮目前段落；點擊任一段可從該段開始朗讀。</li>
+                  <li>若找不到中文語音，請在系統/瀏覽器安裝或啟用中文語音包（例如：Microsoft Hanhan、Google 國語等）。</li>
+                  <li>本工具基於瀏覽器內建的 Web Speech API，實際音色與可用語音取決於使用者裝置。</li>
+                </ul>
+              </div>
+
+              <details className="mt-4 bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                <summary className="cursor-pointer select-none font-medium">Dev / Tests（點我展開）</summary>
+                <div className="mt-3 space-y-3">
+                  <button onClick={runTests} className="px-3 py-1.5 text-sm rounded-full bg-slate-200 hover:bg-slate-300" type="button">
+                    Run unit tests
+                  </button>
+                  {testRuns && (
+                    <div className="text-sm">
+                      <div className="mb-2">結果：{testRuns.filter((t) => t.pass).length}/{testRuns.length} 通過</div>
+                      <ul className="space-y-1">
+                        {testRuns.map((t, i) => (
+                          <li key={i} className={`px-2 py-1 rounded ${t.pass ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                            <span className="font-medium mr-2">{t.pass ? 'PASS' : 'FAIL'}</span>
+                            {t.name} — <span className="opacity-70">{t.info}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </details>
+
+              <footer className="py-6 text-center text-xs text-slate-400">© {new Date().getFullYear()} ReadBuddy｜朗讀夥伴</footer>
+            </div>
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
