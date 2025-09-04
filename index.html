@@ -6,6 +6,10 @@
     <title>ReadBuddy｜朗讀夥伴</title>
     <!-- Tailwind CDN for quick styling (Route A: zero-build) -->
     <script src="https://cdn.tailwindcss.com"></script>
+      <style>
+      /* 全站互動元素使用手指游標 */
+      button, [role="button"], summary, select, input[type="range"], .cursor-pointer { cursor: pointer; }
+    </style>
   </head>
   <body class="min-h-screen bg-slate-50">
     <div id="root"></div>
@@ -467,7 +471,7 @@
                         ) : (
                           articles.map((a) => (
                             <div key={a.id} className={`p-2 flex items-center gap-2 ${a.id === articleId ? 'bg-indigo-50' : 'bg-white'}`}>
-                              <button className="flex-1 text-left truncate" onClick={() => loadArticle(a.id)} title={new Date(a.updatedAt).toLocaleString()}>
+                              <button className="flex-1 text-left truncate cursor-pointer" onClick={() => loadArticle(a.id)} title={new Date(a.updatedAt).toLocaleString()}>
                                 <div className="font-medium truncate">{a.title}</div>
                                 <div className="text-xs text-slate-500">更新：{new Date(a.updatedAt).toLocaleString()} · 單字 {Array.isArray(a.vocab) ? a.vocab.length : 0}</div>
                               </button>
@@ -497,7 +501,7 @@
                         {chunks.map((c, i) => {
                           const active = i === currentIndex && (isSpeaking || isPaused);
                           return (
-                            <div key={i} ref={chunkRefs.current[i]} data-active={active ? 'true' : 'false'} className={`text-sm leading-relaxed rounded-lg border p-2 cursor-text select-text ${active ? 'bg-yellow-50 border-yellow-300 ring-2 ring-yellow-200' : 'bg-white border-slate-200 hover:bg-slate-50'}`}
+                            <div key={i} ref={chunkRefs.current[i]} data-active={active ? 'true' : 'false'} className={`text-sm leading-relaxed rounded-lg border p-2 cursor-pointer select-text ${active ? 'bg-yellow-50 border-yellow-300 ring-2 ring-yellow-200' : 'bg-white border-slate-200 hover:bg-slate-50'}`}
                               onClick={(e) => { if (e.detail > 1) return; const hasSel = (window.getSelection && window.getSelection().toString().trim().length > 0); if (hasSel) return; speakFromIndex(i); }}
                               onDoubleClick={(e) => { e.preventDefault(); e.stopPropagation(); addSelectedUnified(); }}
                               title={active ? '正在朗讀；可反白或雙擊選字（新增單字），或點擊從此段重播' : '可反白或雙擊選字（新增單字）；點擊從這一段開始朗讀'}>
