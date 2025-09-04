@@ -15,20 +15,22 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <script type="text/babel">
+    <script type="text/babel" data-presets="env,react" data-plugins="proposal-optional-chaining,proposal-nullish-coalescing-operator">
       // ========================
-      // ReadBuddy｜朗讀夥伴 (Route A) — with Articles & Vocabulary
-      // Requests implemented:
-      // 1) 加入「儲存文章」功能（本機 localStorage，多篇文章管理）
-      // 2) 移除「載入中文示例 / Load English Sample / 清空」按鈕
-      // 3) 刪除 Dev/Test 區段
+      // ReadBuddy｜朗讀夥伴 (Route A)
+      // Change request:
+      // - Merge "從選取新增" & "從選取新增（AI）" into ONE button/function.
+      // - When adding from selection, also save the article (content + updated vocab) together.
       // ========================
 
       // ----- Constants -----
-      const RATE_MIN = 0.25; // 支援到超慢 0.25×（慢速 2 倍）
+      const RATE_MIN = 0.25;
       const RATE_MAX = 2.0;
-      const RATE_ABS_MAX = 2.5; // 安全上限（不同瀏覽器實作略有差異）
-      const ARTICLES_KEY = 'rb_articles';
+      const RATE_ABS_MAX = 2.5;
+      const ARTICLES_KEY = 'rb_articles_v2'; // stores vocab in each article
+      const AI_PROVIDER_KEY = 'rb_ai_provider';
+      const AI_KEY_KEY = 'rb_ai_key';
+      const AI_MODEL_KEY = 'rb_ai_model';
 
       function App() {
         // ---------- Safe storage helpers ----------
@@ -62,11 +64,14 @@
         const [voiceURI, setVoiceURI] = React.useState(() => storage.get("tts_voiceURI", ""));
         const [status, setStatus] = React.useState("idle"); // idle | speaking | paused
         const [currentIndex, setCurrentIndex] = React.useState(-1);
-        const queueRef = React.useRef([]); // utterances queue (article)
+        const queueRef = React.useRef([]);
         const cancelledRef = React.useRef(false);
-
-        // For syncing highlight into view (article preview)
         const chunkRefs = React.useRef([]);
+        const modeRef = React.useRef('idle'); // 'idle' | 'article' | 'vocab'
+        const rateChangeTimerRef = React.useRef(null);
+        const charIndexRef = React.useRef(0);
+        const pendingCharOffsetRef = React.useRef(0);
+        const pendingResumeIndexRef = React.useRef(null);
 
         // Vocabulary state
         const [vocab, setVocab] = React.useState(() => {
@@ -79,12 +84,17 @@
           }
         });
 
-        // Articles state
+        // Articles state (each article holds its own content + vocab)
         const [articles, setArticles] = React.useState(() => {
           try {
-            const raw = storage.get(ARTICLES_KEY, '[]');
-            const arr = JSON.parse(raw);
-            return Array.isArray(arr) ? arr : [];
+            const rawNew = storage.get(ARTICLES_KEY, null);
+            if (rawNew) {
+              const arr = JSON.parse(rawNew);
+              return Array.isArray(arr) ? arr : [];
+            }
+            const rawOld = storage.get('rb_articles', '[]');
+            const oldArr = JSON.parse(rawOld);
+            return Array.isArray(oldArr) ? oldArr : [];
           } catch {
             return [];
           }
@@ -92,41 +102,26 @@
         const [articleId, setArticleId] = React.useState(null); // null = new
         const [articleTitle, setArticleTitle] = React.useState("");
 
+        // AI config
+        const [aiProvider, setAiProvider] = React.useState(() => storage.get(AI_PROVIDER_KEY, 'none') || 'none');
+        const [aiKey, setAiKey] = React.useState(() => storage.get(AI_KEY_KEY, ''));
+        const [aiModel, setAiModel] = React.useState(() => storage.get(AI_MODEL_KEY, 'gpt-4o-mini'));
+        const [defLoading, setDefLoading] = React.useState(false);
+        const [notice, setNotice] = React.useState('');
+
         // ---------- Env feature detection ----------
-        const supported =
-          typeof window !== "undefined" &&
-          "speechSynthesis" in window &&
-          typeof SpeechSynthesisUtterance !== "undefined";
+        const supported = typeof window !== "undefined" && "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined";
 
         // ---------- Effects: load / persist ----------
-        React.useEffect(() => {
-          const savedText = storage.get("tts_text", "");
-          if (savedText) setText(savedText);
-        }, [storage]);
-
-        React.useEffect(() => {
-          storage.set("tts_rate", String(rate));
-        }, [rate, storage]);
-
-        React.useEffect(() => {
-          if (voiceURI) storage.set("tts_voiceURI", voiceURI);
-        }, [voiceURI, storage]);
-
-        React.useEffect(() => {
-          storage.set("tts_text", text);
-        }, [text, storage]);
-
-        React.useEffect(() => {
-          try {
-            storage.set("tts_vocab", JSON.stringify(vocab));
-          } catch {}
-        }, [vocab, storage]);
-
-        React.useEffect(() => {
-          try {
-            storage.set(ARTICLES_KEY, JSON.stringify(articles));
-          } catch {}
-        }, [articles, storage]);
+        React.useEffect(() => { const savedText = storage.get("tts_text", ""); if (savedText) setText(savedText); }, [storage]);
+        React.useEffect(() => { storage.set("tts_rate", String(rate)); }, [rate, storage]);
+        React.useEffect(() => { if (voiceURI) storage.set("tts_voiceURI", voiceURI); }, [voiceURI, storage]);
+        React.useEffect(() => { storage.set("tts_text", text); }, [text, storage]);
+        React.useEffect(() => { try { storage.set("tts_vocab", JSON.stringify(vocab)); } catch {} }, [vocab, storage]);
+        React.useEffect(() => { try { storage.set(ARTICLES_KEY, JSON.stringify(articles)); } catch {} }, [articles, storage]);
+        React.useEffect(() => { storage.set(AI_PROVIDER_KEY, aiProvider); }, [aiProvider, storage]);
+        React.useEffect(() => { if (aiKey) storage.set(AI_KEY_KEY, aiKey); }, [aiKey, storage]);
+        React.useEffect(() => { storage.set(AI_MODEL_KEY, aiModel || 'gpt-4o-mini'); }, [aiModel, storage]);
 
         // ---------- Voices loader ----------
         const loadVoices = React.useCallback(() => {
@@ -134,12 +129,7 @@
           const list = window.speechSynthesis.getVoices();
           setVoices(list);
           if (!voiceURI && list.length) {
-            // Prefer zh-TW, zh-CN, then en-US, else first
-            const prefer =
-              list.find((v) => /zh-TW/i.test(v.lang)) ||
-              list.find((v) => /zh-CN/i.test(v.lang)) ||
-              list.find((v) => /en-US/i.test(v.lang)) ||
-              list[0];
+            const prefer = list.find((v) => /zh-TW/i.test(v.lang)) || list.find((v) => /zh-CN/i.test(v.lang)) || list.find((v) => /en-US/i.test(v.lang)) || list[0];
             if (prefer) setVoiceURI(prefer.voiceURI || prefer.name);
           }
         }, [supported, voiceURI]);
@@ -147,57 +137,39 @@
         React.useEffect(() => {
           if (!supported) return;
           loadVoices();
-          // Some browsers populate voices asynchronously
           window.speechSynthesis.onvoiceschanged = loadVoices;
-          return () => {
-            if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = null;
-          };
+          return () => { if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = null; };
         }, [supported, loadVoices]);
 
         // ---------- Utils ----------
         function countWords(t) {
-          // Basic estimate (works for English). For CJK, approximate by characters/2
           const latin = (t.match(/\S+/g) || []).length;
           const cjk = t.replace(/[\x00-\x7F]/g, "").length / 2;
           return Math.max(latin, Math.round(cjk));
         }
-
         function estimateDuration(txt, r) {
           const words = countWords(txt);
-          const baseWPM = 160; // at rate = 1.0
-          if (!words) return "0:00";
+          const baseWPM = 160; if (!words) return "0:00";
           const minutes = words / (baseWPM * Math.max(r, RATE_MIN));
           const totalSec = Math.ceil(minutes * 60);
           const mm = Math.floor(totalSec / 60);
           const ss = String(totalSec % 60).padStart(2, "0");
           return `${mm}:${ss}`;
         }
-
         function splitIntoChunks(t) {
-          // Split by sentence enders and new lines, then chunk long sentences
           const parts = [];
-          const tokens = t
-            .split(/([。！？!?.\n]+)/)
-            .reduce((acc, cur) => {
-              if (/[。！？!?.\n]+/.test(cur) && acc.length) acc[acc.length - 1] += cur;
-              else if (cur.trim()) acc.push(cur.trim());
-              return acc;
-            }, []);
-
-          const MAX_LEN = 180; // keep short for stability across browsers
+          const tokens = t.split(/([。！？!?.\n]+)/).reduce((acc, cur) => {
+            if (/[。！？!?.\n]+/.test(cur) && acc.length) acc[acc.length - 1] += cur; else if (cur.trim()) acc.push(cur.trim());
+            return acc;
+          }, []);
+          const MAX_LEN = 180;
           for (const s of tokens) {
-            if (s.length <= MAX_LEN) {
-              parts.push(s);
-            } else {
-              // Soft split at spaces or punctuation
+            if (s.length <= MAX_LEN) parts.push(s); else {
               let start = 0;
               while (start < s.length) {
                 let end = Math.min(start + MAX_LEN, s.length);
                 const slice = s.slice(start, end);
-                const back = Math.max(
-                  slice.lastIndexOf(" "),
-                  slice.search(/[，、,;；]/) >= 0 ? slice.search(/[，、,;；](?!.*[，、,;；])/) : -1
-                );
+                const back = Math.max(slice.lastIndexOf(" "), slice.search(/[，、,;；]/) >= 0 ? slice.search(/[，、,;；](?!.*[，、,;；])/) : -1);
                 if (back > 40) end = start + back + 1;
                 parts.push(s.slice(start, end).trim());
                 start = end;
@@ -206,214 +178,244 @@
           }
           return parts;
         }
-
-        const getSelectedVoice = React.useCallback(() => {
-          return voices.find((v) => (v.voiceURI || v.name) === voiceURI) || null;
-        }, [voices, voiceURI]);
-
-        // Chunks derived from current text (used for preview + TTS queue)
+        const getSelectedVoice = React.useCallback(() => voices.find((v) => (v.voiceURI || v.name) === voiceURI) || null, [voices, voiceURI]);
         const chunks = React.useMemo(() => splitIntoChunks(text.trim()), [text]);
-
-        // Keep refs array length in sync
-        React.useEffect(() => {
-          chunkRefs.current = chunks.map((_, i) => chunkRefs.current[i] || React.createRef());
-        }, [chunks.length]);
-
-        // Auto scroll active chunk into view
+        React.useEffect(() => { chunkRefs.current = chunks.map((_, i) => chunkRefs.current[i] || React.createRef()); }, [chunks.length]);
         React.useEffect(() => {
           if (currentIndex < 0) return;
-          const el = chunkRefs.current[currentIndex]?.current;
+          var refObj = chunkRefs.current[currentIndex];
+          var el = refObj && refObj.current;
           if (el && typeof el.scrollIntoView === "function") {
             el.scrollIntoView({ behavior: "smooth", block: "center" });
           }
         }, [currentIndex]);
 
-        // ---------- Articles helpers ----------
-        const createArticle = () => {
-          const title = (articleTitle || '').trim() || new Date().toLocaleString();
-          const id = Date.now() + Math.random().toString(36).slice(2);
+        // ---------- Article helpers ----------
+        const saveArticleWithVocab = (nextVocab) => {
           const now = new Date().toISOString();
-          const item = { id, title, content: text, createdAt: now, updatedAt: now };
-          setArticles((prev) => [item, ...prev]);
-          setArticleId(id);
-          setArticleTitle(title);
-        };
-
-        const updateArticle = () => {
-          if (!articleId) { createArticle(); return; }
           const title = (articleTitle || '').trim() || new Date().toLocaleString();
-          const now = new Date().toISOString();
-          setArticles((prev) => prev.map((a) => a.id === articleId ? { ...a, title, content: text, updatedAt: now } : a));
-          setArticleTitle(title);
-        };
-
-        const loadArticle = (id) => {
-          const a = articles.find((x) => x.id === id);
-          if (!a) return;
-          setArticleId(a.id);
-          setArticleTitle(a.title);
-          setText(a.content || "");
-        };
-
-        const removeArticle = (id) => {
-          setArticles((prev) => prev.filter((x) => x.id !== id));
-          if (id === articleId) {
-            setArticleId(null);
-            setArticleTitle("");
+          if (!articleId) {
+            const id = Date.now() + Math.random().toString(36).slice(2);
+            const item = { id, title, content: text, vocab: [...nextVocab], createdAt: now, updatedAt: now };
+            setArticles((prev) => [item, ...prev]);
+            setArticleId(id);
+            setArticleTitle(title);
+          } else {
+            setArticles((prev) => prev.map((a) => a.id === articleId ? { ...a, title, content: text, vocab: [...nextVocab], updatedAt: now } : a));
           }
         };
 
-        const newArticle = () => {
-          setArticleId(null);
-          setArticleTitle("");
-          setText("");
+        const createArticle = () => saveArticleWithVocab(vocab);
+        const updateArticle = () => saveArticleWithVocab(vocab);
+        const loadArticle = (id) => {
+          const a = articles.find((x) => x.id === id); if (!a) return;
+          setArticleId(a.id); setArticleTitle(a.title); setText(a.content || ""); setVocab(Array.isArray(a.vocab) ? a.vocab : []);
         };
-
+        const removeArticle = (id) => {
+          setArticles((prev) => prev.filter((x) => x.id !== id));
+          if (id === articleId) { setArticleId(null); setArticleTitle(""); setText(""); setVocab([]); }
+        };
+        const newArticle = () => { setArticleId(null); setArticleTitle(""); setText(""); setVocab([]); };
         const renameArticle = (id) => {
-          const a = articles.find((x) => x.id === id);
-          if (!a) return;
-          const nv = prompt('重新命名文章標題', a.title);
-          if (nv == null) return;
-          const title = nv.trim();
-          if (!title) return;
+          const a = articles.find((x) => x.id === id); if (!a) return;
+          const nv = prompt('重新命名文章標題', a.title); if (nv == null) return;
+          const title = nv.trim(); if (!title) return;
           const now = new Date().toISOString();
           setArticles((prev) => prev.map((x) => x.id === id ? { ...x, title, updatedAt: now } : x));
           if (id === articleId) setArticleTitle(title);
         };
 
-        // ---------- TTS controls (article) ----------
-        function cancelAll() {
-          if (!supported) return;
-          cancelledRef.current = true;
-          window.speechSynthesis.cancel();
-          queueRef.current = [];
-          setStatus("idle");
-          setCurrentIndex(-1);
+        // ---------- Selection → Vocab (Unified, with AI and auto-save) ----------
+        const sanitizeTerm = (s) => (s || '')
+          .replace(/[\n\r\t]+/g, ' ')
+          .replace(/^\s+|\s+$/g, '')
+          .replace(/^[^A-Za-z0-9\u4e00-\u9fff]+/, '')
+          .replace(/[^A-Za-z0-9\u4e00-\u9fff\-’' ]+$/, '')
+          .slice(0, 64);
+        const getSelectedFromTextarea = () => {
+          const ta = document.getElementById('tts-text'); if (!ta) return '';
+          const { selectionStart: s, selectionEnd: e } = ta; if (typeof s === 'number' && typeof e === 'number' && e > s) return ta.value.substring(s, e); return '';
+        };
+        const getSelectedFromWindow = () => { const sel = window.getSelection && window.getSelection(); return sel ? String(sel.toString()) : ''; };
+
+        async function addSelectedUnified() {
+          const raw = getSelectedFromTextarea() || getSelectedFromWindow();
+          const term = sanitizeTerm(raw);
+          if (!term) { setNotice('請先在文章編輯框或預覽區選取單字/片語'); return; }
+          setNotice(''); setDefLoading(true);
+          try {
+            const def = await generateDefinition(term);
+            // compute next vocab first
+            let nextVocab;
+            setVocab((prev) => {
+              const exists = prev.some((x) => x.term.toLowerCase() === term.toLowerCase());
+              nextVocab = exists ? prev.map((x) => (x.term.toLowerCase() === term.toLowerCase() ? { ...x, definition: def || x.definition } : x)) : [...prev, { id: Date.now() + Math.random().toString(36).slice(2), term, definition: def || '' }];
+              return nextVocab;
+            });
+            // also save article snapshot with updated vocab
+            saveArticleWithVocab(nextVocab || vocab);
+            setNotice(`已加入並儲存：${term}${def ? '（含解釋）' : '（無解釋）'}`);
+          } catch (e) {
+            console.error(e);
+            // fallback: add without definition
+            let nextVocab;
+            setVocab((prev) => {
+              const exists = prev.some((x) => x.term.toLowerCase() === term.toLowerCase());
+              nextVocab = exists ? prev : [...prev, { id: Date.now() + Math.random().toString(36).slice(2), term, definition: '' }];
+              return nextVocab;
+            });
+            saveArticleWithVocab(nextVocab || vocab);
+            setNotice(`已加入並儲存：${term}（AI 解析失敗，先加入單字）`);
+          } finally {
+            setDefLoading(false);
+          }
         }
 
-        function speakFromIndex(startIndex = 0) {
+        async function generateDefinition(term) {
+          // 1) Prefer OpenAI if configured
+          if (aiProvider === 'openai' && aiKey) {
+            try {
+              const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiKey}` },
+                body: JSON.stringify({
+                  model: aiModel || 'gpt-4o-mini', temperature: 0.2,
+                  messages: [
+                    { role: 'system', content: 'You are a concise bilingual dictionary. Reply in Traditional Chinese with part of speech and one short example. Keep under 25 words.' },
+                    { role: 'user', content: `Define: ${term}` }
+                  ],
+                }),
+              });
+              if (!resp.ok) throw new Error('OpenAI API error');
+              const data = await resp.json();
+              const choice = data && data.choices && data.choices[0];
+              const txt = choice && choice.message && choice.message.content ? String(choice.message.content).trim() : "";
+              if (txt) return txt;
+            } catch (e) { console.warn('OpenAI error', e); }
+          }
+          // 2) Fallback: Free Dictionary API (English only)
+          try {
+            const r = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(term)}`);
+            if (r.ok) {
+              const j = await r.json();
+              const first = Array.isArray(j) ? j[0] : null;
+              const meanings = first && first.meanings;
+              const m0 = Array.isArray(meanings) ? meanings[0] : null;
+              const defs = m0 && m0.definitions;
+              const d0 = Array.isArray(defs) && defs[0] ? defs[0].definition : null;
+              const pos = m0 && m0.partOfSpeech ? `(${m0.partOfSpeech}) ` : '';
+              if (d0) return `${pos}${d0}`;
+            }
+          } catch (e) { console.warn('DictAPI error', e); }
+          return '';
+        }
+
+        // ---------- Live rate change (hot apply) ----------
+        function handleRateChange(newRate) {
+          const clamped = Math.min(Math.max(newRate, RATE_MIN), RATE_MAX);
+          setRate(clamped);
+          if (!supported) return;
+          if (status === 'speaking') {
+            if (modeRef.current === 'article') {
+              if (rateChangeTimerRef.current) clearTimeout(rateChangeTimerRef.current);
+              rateChangeTimerRef.current = setTimeout(() => {
+                try { window.speechSynthesis.cancel(); } catch (_) {}
+                cancelledRef.current = false;
+                const startAt = currentIndex >= 0 ? currentIndex : 0;
+                const charAt = charIndexRef.current || 0;
+                setTimeout(() => speakFromIndex(startAt, charAt), 0);
+              }, 120);
+            }
+          } else if (status === 'paused') {
+            if (modeRef.current === 'article') {
+              try { window.speechSynthesis.cancel(); } catch (_) {}
+              pendingResumeIndexRef.current = currentIndex >= 0 ? currentIndex : 0;
+              pendingCharOffsetRef.current = charIndexRef.current || 0;
+              setStatus('paused');
+            }
+          }
+        }
+
+        // ---------- TTS controls ----------
+        function cancelAll() { if (!supported) return; cancelledRef.current = true; try { window.speechSynthesis.cancel(); } catch (_) {} queueRef.current = []; modeRef.current = 'idle'; pendingResumeIndexRef.current = null; setStatus("idle"); setCurrentIndex(-1); }
+        function speakFromIndex(startIndex = 0, charOffset = 0) {
           if (!supported || !text.trim()) return;
           cancelAll();
           cancelledRef.current = false;
-
-          // Use current chunks to keep highlight in sync
+          modeRef.current = 'article';
           queueRef.current = chunks;
-
           const voice = getSelectedVoice();
+          const clamp = (x) => Math.min(Math.max(x, RATE_MIN), RATE_ABS_MAX);
 
-          const speakChunk = (i) => {
+          const speakChunk = (i, offset) => {
             if (cancelledRef.current) return;
-            if (i >= queueRef.current.length) {
-              setStatus("idle");
-              setCurrentIndex(-1);
-              return;
+            if (i >= queueRef.current.length) { setStatus("idle"); setCurrentIndex(-1); return; }
+            let chunkText = String(queueRef.current[i] || "");
+            if (offset && offset > 0) {
+              if (offset >= chunkText.length) { speakChunk(i + 1, 0); return; }
+              chunkText = chunkText.slice(offset);
             }
-            const utter = new SpeechSynthesisUtterance(queueRef.current[i]);
+            const utter = new SpeechSynthesisUtterance(chunkText);
             if (voice) utter.voice = voice;
-            utter.rate = Math.min(Math.max(rate, RATE_MIN), RATE_ABS_MAX);
+            utter.rate = clamp(rate);
             utter.pitch = 1.0;
-
-            utter.onstart = () => {
-              setStatus("speaking");
-              setCurrentIndex(i);
-            };
-            utter.onend = () => {
-              setTimeout(() => speakChunk(i + 1), 50);
-            };
-            utter.onerror = () => {
-              setTimeout(() => speakChunk(i + 1), 50);
-            };
-
+            utter.onstart = () => { setStatus("speaking"); setCurrentIndex(i); charIndexRef.current = offset || 0; };
+            utter.onboundary = (ev) => { if (typeof ev.charIndex === 'number') { charIndexRef.current = (offset || 0) + ev.charIndex; } };
+            utter.onend = () => { charIndexRef.current = 0; setTimeout(() => speakChunk(i + 1, 0), 20); };
+            utter.onerror = () => { charIndexRef.current = 0; setTimeout(() => speakChunk(i + 1, 0), 20); };
             window.speechSynthesis.speak(utter);
           };
-
-          speakChunk(startIndex);
+          speakChunk(startIndex, charOffset || 0);
         }
 
-        function speak() {
-          speakFromIndex(0);
-        }
-
-        function pause() {
-          if (!supported) return;
-          window.speechSynthesis.pause();
-          setStatus("paused");
-        }
-
+        
+        function speak() { speakFromIndex(0); }
+        function pause() { if (!supported) return; window.speechSynthesis.pause(); setStatus("paused"); }
         function resume() {
           if (!supported) return;
-          window.speechSynthesis.resume();
-          setStatus("speaking");
+          if (window.speechSynthesis.speaking) {
+            try { window.speechSynthesis.resume(); } catch (_) {}
+            setStatus("speaking");
+          } else {
+            const idx = pendingResumeIndexRef.current != null ? pendingResumeIndexRef.current : (currentIndex >= 0 ? currentIndex : 0);
+            const off = pendingCharOffsetRef.current || 0;
+            pendingResumeIndexRef.current = null;
+            pendingCharOffsetRef.current = 0;
+            speakFromIndex(idx, off);
+          }
         }
 
-        // ---------- Vocabulary helpers ----------
+        // ---------- Vocabulary playback helpers ----------
         function speakTextsSequence(texts) {
           if (!supported || !texts.length) return;
           cancelAll();
           cancelledRef.current = false;
+          modeRef.current = 'vocab';
           const voice = getSelectedVoice();
           let i = -1;
-
           const next = () => {
             if (cancelledRef.current) return;
             i += 1;
-            if (i >= texts.length) {
-              setStatus("idle");
-              return;
-            }
-            const u = new SpeechSynthesisUtterance(texts[i]);
-            if (voice) u.voice = voice;
-            u.rate = Math.min(Math.max(rate, RATE_MIN), RATE_ABS_MAX);
-            u.pitch = 1.0;
-            u.onstart = () => {
-              setStatus("speaking");
-              setCurrentIndex(-1); // not tied to article highlight
-            };
-            u.onend = () => setTimeout(next, 120);
-            u.onerror = () => setTimeout(next, 120);
+            if (i >= texts.length) { setStatus("idle"); return; }
+            const u = new SpeechSynthesisUtterance(texts[i]); if (voice) u.voice = voice; u.rate = Math.min(Math.max(rate, RATE_MIN), RATE_ABS_MAX); u.pitch = 1.0;
+            u.onstart = () => { setStatus("speaking"); setCurrentIndex(-1); }; u.onend = () => setTimeout(next, 120); u.onerror = () => setTimeout(next, 120);
             window.speechSynthesis.speak(u);
           };
-
           next();
         }
-
-        function playWord(term, times = 3, withDefinition = false, definition = "") {
-          const texts = [];
-          for (let i = 0; i < times; i++) {
-            texts.push(term);
-            if (withDefinition && definition) texts.push(definition);
-          }
-          speakTextsSequence(texts);
-        }
-
-        function playAllWords(times = 2, withDefinition = false) {
-          const texts = [];
-          vocab.forEach((it) => {
-            for (let i = 0; i < times; i++) {
-              texts.push(it.term);
-              if (withDefinition && it.definition) texts.push(it.definition);
-            }
-          });
-          speakTextsSequence(texts);
-        }
+        function playWord(term, times = 3, withDefinition = false, definition = "") { const texts = []; for (let i = 0; i < times; i++) { texts.push(term); if (withDefinition && definition) texts.push(definition); } speakTextsSequence(texts); }
+        function playAllWords(times = 2, withDefinition = false) { const texts = []; vocab.forEach((it) => { for (let i = 0; i < times; i++) { texts.push(it.term); if (withDefinition && it.definition) texts.push(it.definition); } }); speakTextsSequence(texts); }
 
         function addVocab(term, definition) {
-          const t = (term || '').trim();
-          const d = (definition || '').trim();
-          if (!t) return false;
+          const t = (term || '').trim(); const d = (definition || '').trim(); if (!t) return false;
           setVocab((prev) => {
             const exists = prev.some((x) => x.term.toLowerCase() === t.toLowerCase());
-            if (exists) {
-              return prev.map((x) => (x.term.toLowerCase() === t.toLowerCase() ? { ...x, definition: d || x.definition } : x));
-            }
+            if (exists) return prev.map((x) => (x.term.toLowerCase() === t.toLowerCase() ? { ...x, definition: d || x.definition } : x));
             return [...prev, { id: Date.now() + Math.random().toString(36).slice(2), term: t, definition: d }];
           });
           return true;
         }
-
-        function removeVocab(id) {
-          setVocab((prev) => prev.filter((x) => x.id !== id));
-        }
+        function removeVocab(id) { setVocab((prev) => prev.filter((x) => x.id !== id)); }
 
         // ---------- Derived ----------
         const isSpeaking = status === "speaking";
@@ -445,18 +447,12 @@
                     <div className="mb-3 grid grid-cols-1 md:grid-cols-3 gap-2 items-center">
                       <div className="md:col-span-2">
                         <label className="block text-sm font-medium mb-1" htmlFor="article-title">文章標題</label>
-                        <input
-                          id="article-title"
-                          value={articleTitle}
-                          onChange={(e) => setArticleTitle(e.target.value)}
-                          placeholder="未命名文章"
-                          className="w-full rounded-xl border border-slate-300 p-2 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                        />
+                        <input id="article-title" value={articleTitle} onChange={(e) => setArticleTitle(e.target.value)} placeholder="未命名文章" className="w-full rounded-xl border border-slate-300 p-2 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
                       </div>
-                      <div className="flex gap-2 md:justify-end">
+                      <div className="flex gap-2 md:justify-end flex-wrap">
                         <button onClick={updateArticle} className="px-3 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700">💾 儲存</button>
                         <button onClick={newArticle} className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200">📝 新文章</button>
-                      </div>
+                        </div>
                     </div>
 
                     {/* Articles list */}
@@ -473,7 +469,7 @@
                             <div key={a.id} className={`p-2 flex items-center gap-2 ${a.id === articleId ? 'bg-indigo-50' : 'bg-white'}`}>
                               <button className="flex-1 text-left truncate" onClick={() => loadArticle(a.id)} title={new Date(a.updatedAt).toLocaleString()}>
                                 <div className="font-medium truncate">{a.title}</div>
-                                <div className="text-xs text-slate-500">更新：{new Date(a.updatedAt).toLocaleString()}</div>
+                                <div className="text-xs text-slate-500">更新：{new Date(a.updatedAt).toLocaleString()} · 單字 {Array.isArray(a.vocab) ? a.vocab.length : 0}</div>
                               </button>
                               <button className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" onClick={() => renameArticle(a.id)}>重新命名</button>
                               <button className="px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-xs text-red-700 border border-red-200" onClick={() => removeArticle(a.id)}>刪除</button>
@@ -488,14 +484,7 @@
                       <label htmlFor="tts-text" className="font-medium">輸入文字</label>
                       <div className="text-xs text-slate-500">{text.length} 字 · 預估 {est}</div>
                     </div>
-                    <textarea
-                      id="tts-text"
-                      value={text}
-                      onChange={(e) => setText(e.target.value)}
-                      placeholder="貼上或輸入要唸出來的文字…"
-                      className="w-full h-40 md:h-44 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 p-3 resize-vertical bg-slate-50/50"
-                      aria-label="輸入要朗讀的文字"
-                    />
+                    <textarea id="tts-text" value={text} onChange={(e) => setText(e.target.value)} onDoubleClick={() => addSelectedUnified()} onKeyDown={(e) => { if (e.key === 'Enter') { const ta = e.target; const s = ta.selectionStart; const en = ta.selectionEnd; if (typeof s === 'number' && typeof en === 'number' && en > s) { e.preventDefault(); addSelectedUnified(); } } }} placeholder="貼上或輸入要唸出來的文字…（反白、雙擊或按 Enter 可加入 Vocabulary）" className="w-full h-40 md:h-44 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 p-3 resize-vertical bg-slate-50/50" aria-label="輸入要朗讀的文字" />
 
                     {/* Preview with synchronized highlight */}
                     <div className="mt-4">
@@ -503,106 +492,88 @@
                         <h2 className="font-medium">預覽（同步高亮）</h2>
                         <div className="text-xs text-slate-500">段落數：{chunks.length} · 進度：{currentIndex >= 0 ? currentIndex + 1 : 0}/{chunks.length}</div>
                       </div>
-                      <div className="max-h-64 overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2" data-testid="preview-pane">
-                        {chunks.length === 0 && (
-                          <div className="text-sm text-slate-500">無文字，請在上方輸入內容。</div>
-                        )}
+                      <div className="max-h-64 overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2" data-testid="preview-pane" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') { const s = (window.getSelection && window.getSelection().toString().trim()); if (s) { e.preventDefault(); addSelectedUnified(); } } }}>
+                        {chunks.length === 0 && (<div className="text-sm text-slate-500">無文字，請在上方輸入內容。</div>)}
                         {chunks.map((c, i) => {
                           const active = i === currentIndex && (isSpeaking || isPaused);
                           return (
-                            <div
-                              key={i}
-                              ref={chunkRefs.current[i]}
-                              data-active={active ? 'true' : 'false'}
-                              className={`text-sm leading-relaxed rounded-lg border p-2 cursor-pointer select-none ${
-                                active
-                                  ? 'bg-yellow-50 border-yellow-300 ring-2 ring-yellow-200'
-                                  : 'bg-white border-slate-200 hover:bg-slate-50'
-                              }`}
-                              onClick={() => speakFromIndex(i)}
-                              title={active ? '正在朗讀，點擊可從此段重播' : '點擊從這一段開始朗讀'}
-                            >
+                            <div key={i} ref={chunkRefs.current[i]} data-active={active ? 'true' : 'false'} className={`text-sm leading-relaxed rounded-lg border p-2 cursor-text select-text ${active ? 'bg-yellow-50 border-yellow-300 ring-2 ring-yellow-200' : 'bg-white border-slate-200 hover:bg-slate-50'}`}
+                              onClick={(e) => { if (e.detail > 1) return; const hasSel = (window.getSelection && window.getSelection().toString().trim().length > 0); if (hasSel) return; speakFromIndex(i); }}
+                              onDoubleClick={(e) => { e.preventDefault(); e.stopPropagation(); addSelectedUnified(); }}
+                              title={active ? '正在朗讀；可反白或雙擊選字（新增單字），或點擊從此段重播' : '可反白或雙擊選字（新增單字）；點擊從這一段開始朗讀'}>
                               <span className="opacity-60 mr-2">[{i + 1}]</span>
                               <span>{c}</span>
                             </div>
                           );
                         })}
                       </div>
+                      {notice && <div className="mt-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1">{notice}</div>}
                     </div>
                   </div>
                 </div>
 
-                {/* Right: Controls */}
+                {/* Right: Controls + AI Settings */}
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
                   <div className="space-y-4">
                     <div>
                       <label className="block font-medium mb-1">語音（Voice）</label>
-                      <select
-                        value={voiceURI}
-                        onChange={(e) => setVoiceURI(e.target.value)}
-                        className="w-full rounded-xl border border-slate-300 p-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                        aria-label="選擇語音"
-                      >
+                      <select value={voiceURI} onChange={(e) => setVoiceURI(e.target.value)} className="w-full rounded-xl border border-slate-300 p-2 focus:outline-none focus:ring-2 focus:ring-indigo-400" aria-label="選擇語音">
                         {voices.length === 0 && <option>（正在載入可用語音…）</option>}
-                        {voices.map((v) => (
-                          <option key={v.voiceURI || v.name} value={v.voiceURI || v.name}>
-                            {v.name} — {v.lang}
-                          </option>
-                        ))}
+                        {voices.map((v) => (<option key={v.voiceURI || v.name} value={v.voiceURI || v.name}>{v.name} — {v.lang}</option>))}
                       </select>
-                      {selectedVoice && (
-                        <div className="mt-1 text-xs text-slate-500">目前：{selectedVoice.name}（{selectedVoice.lang}）</div>
-                      )}
+                      {selectedVoice && (<div className="mt-1 text-xs text-slate-500">目前：{selectedVoice.name}（{selectedVoice.lang}）</div>)}
                     </div>
 
                     <div>
                       <label htmlFor="rate" className="block font-medium mb-1">語速（{rate.toFixed(2)}×）</label>
-                      <input
-                        id="rate"
-                        type="range"
-                        min={RATE_MIN}
-                        max={RATE_MAX}
-                        step={0.05}
-                        value={rate}
-                        onChange={(e) => setRate(parseFloat(e.target.value))}
-                        className="w-full"
-                        aria-label="調整語速"
-                      />
-                      <div className="flex justify-between text-xs text-slate-500">
-                        <span>更慢（{RATE_MIN}×）</span>
-                        <span>更快（{RATE_MAX}×）</span>
-                      </div>
+                      <input id="rate" type="range" min={RATE_MIN} max={RATE_MAX} step={0.05} value={rate} onChange={(e) => handleRateChange(parseFloat(e.target.value))} className="w-full" aria-label="調整語速" />
+                      <div className="flex justify-between text-xs text-slate-500"><span>更慢（{RATE_MIN}×）</span><span>更快（{RATE_MAX}×）</span></div>
                       <div className="flex flex-wrap gap-2 mt-2">
-                        <button onClick={() => setRate(0.25)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">超慢 0.25×</button>
-                        <button onClick={() => setRate(0.5)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">慢速×2（0.5×）</button>
-                        <button onClick={() => setRate(1.0)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">正常 1.0×</button>
-                        <button onClick={() => setRate(1.5)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">1.5×</button>
-                        <button onClick={() => setRate(2.0)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">2.0×</button>
+                        <button onClick={() => handleRateChange(0.25)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">超慢 0.25×</button>
+                        <button onClick={() => handleRateChange(0.5)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">慢速×2（0.5×）</button>
+                        <button onClick={() => handleRateChange(1.0)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">正常 1.0×</button>
+                        <button onClick={() => handleRateChange(1.5)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">1.5×</button>
+                        <button onClick={() => handleRateChange(2.0)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">2.0×</button>
                       </div>
                     </div>
 
                     <div className="flex gap-2 pt-2">
-                      <button
-                        onClick={speak}
-                        disabled={!supported || !text.trim()}
-                        className="flex-1 px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                        aria-label="開始朗讀"
-                      >▶️ 朗讀</button>
+                      <button onClick={speak} disabled={!supported || !text.trim()} className="flex-1 px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed" aria-label="開始朗讀">▶️ 朗讀</button>
                       {isSpeaking ? (
                         <button onClick={pause} className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200" aria-label="暫停朗讀">⏸ 暫停</button>
                       ) : isPaused ? (
                         <button onClick={resume} className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200" aria-label="繼續朗讀">⏯ 繼續</button>
                       ) : (
-                        <button disabled className="px-4 py-2 rounded-xl bg-slate-50 text-slate-400 border border-slate-200" aria-disabled>
-                          ⏸ 暫停
-                        </button>
+                        <button disabled className="px-4 py-2 rounded-xl bg-slate-50 text-slate-400 border border-slate-200" aria-disabled>⏸ 暫停</button>
                       )}
                       <button onClick={cancelAll} className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200" aria-label="停止朗讀">⏹ 停止</button>
                     </div>
 
-                    {(isSpeaking || isPaused) && (
-                      <div className="text-xs text-slate-500">進度：{currentIndex + 1}/{chunks.length}</div>
-                    )}
+                    {(isSpeaking || isPaused) && (<div className="text-xs text-slate-500">進度：{currentIndex + 1}/{chunks.length}</div>)}
+
+                    {/* AI Settings */}
+                    <div className="pt-2 border-t border-slate-200">
+                      <details className="rounded-xl bg-slate-50 p-3">
+                        <summary className="cursor-pointer select-none font-medium">AI 設定（可選）</summary>
+                        <div className="mt-3 space-y-2 text-sm">
+                          <label className="block">提供者
+                            <select value={aiProvider} onChange={(e) => setAiProvider(e.target.value)} className="mt-1 w-full rounded border p-1">
+                              <option value="none">不使用（僅字典備援）</option>
+                              <option value="openai">OpenAI（需 API Key）</option>
+                            </select>
+                          </label>
+                          {aiProvider === 'openai' && (<>
+                            <label className="block">API Key
+                              <input type="password" value={aiKey} onChange={(e) => setAiKey(e.target.value)} placeholder="sk-..." className="mt-1 w-full rounded border p-1" />
+                            </label>
+                            <label className="block">Model
+                              <input type="text" value={aiModel} onChange={(e) => setAiModel(e.target.value)} className="mt-1 w-full rounded border p-1" />
+                            </label>
+                            <div className="text-[11px] text-slate-500">提醒：把 Key 放在前端有外流風險，僅供個人使用。正式上線請改用後端代理。</div>
+                          </>)}
+                        </div>
+                      </details>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -612,10 +583,6 @@
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="font-medium">單字與解釋（Vocabulary）</h2>
                   <div className="flex items-center gap-2 text-sm">
-                    <label className="inline-flex items-center gap-1">
-                      <input type="checkbox" className="accent-indigo-600" onChange={(e) => speakTextsSequence([])} disabled />
-                      <span className="opacity-60">（提示：在下方用「詞+解釋」或「全部播放」）</span>
-                    </label>
                     <button onClick={() => playAllWords(2, false)} className="px-3 py-1.5 rounded-full bg-indigo-600 text-white hover:bg-indigo-700">▶️ 全部播放（每詞 2x）</button>
                   </div>
                 </div>
@@ -630,10 +597,9 @@
               <div className="mt-6 bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
                 <h2 className="font-medium mb-2">使用說明</h2>
                 <ul className="list-disc list-inside text-sm text-slate-600 space-y-1">
-                  <li>輸入標題與內容後，可按「💾 儲存」保存文章；文章都保存在本機（localStorage）。</li>
-                  <li>點選「我的文章」清單中的項目可載入、重新命名或刪除。</li>
-                  <li>朗讀時會同步高亮目前段落；點段落可從該段開始播放。</li>
-                  <li>若找不到中文語音，請在系統/瀏覽器安裝中文語音包（例如 Microsoft Hanhan、Google 國語）。</li>
+                  <li>在編輯框或預覽區<strong>雙擊</strong>單字（或反白選取、<strong>按 Enter</strong>）即可加入 Vocabulary，並自動嘗試用 AI 產生繁中解釋（失敗則僅加入單字）。</li>
+                  <li>加入後會<strong>自動將文章與更新後的單字表一起儲存</strong>（未建立文章則會自動建立）。</li>
+                  <li>載入文章時會帶出該篇的專屬單字表；朗讀支援同步高亮與段落點選播放。</li>
                 </ul>
               </div>
 
@@ -649,28 +615,9 @@
         const [definition, setDefinition] = React.useState("");
         return (
           <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-            <input
-              value={term}
-              onChange={(e) => setTerm(e.target.value)}
-              placeholder="單字（必填）"
-              className="md:col-span-2 rounded-lg border border-slate-300 p-2 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              aria-label="單字"
-            />
-            <input
-              value={definition}
-              onChange={(e) => setDefinition(e.target.value)}
-              placeholder="解釋（選填）"
-              className="md:col-span-2 rounded-lg border border-slate-300 p-2 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              aria-label="解釋"
-            />
-            <button
-              type="button"
-              onClick={() => {
-                const ok = addVocab(term, definition);
-                if (ok) { setTerm(""); setDefinition(""); }
-              }}
-              className="rounded-lg border border-slate-300 px-3 py-2 bg-slate-100 hover:bg-slate-200"
-            >新增</button>
+            <input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="單字（必填）" className="md:col-span-2 rounded-lg border border-slate-300 p-2 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-indigo-400" aria-label="單字" />
+            <input value={definition} onChange={(e) => setDefinition(e.target.value)} placeholder="解釋（選填）" className="md:col-span-2 rounded-lg border border-slate-300 p-2 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-indigo-400" aria-label="解釋" />
+            <button type="button" onClick={() => { const ok = addVocab(term, definition); if (ok) { setTerm(""); setDefinition(""); } }} className="rounded-lg border border-slate-300 px-3 py-2 bg-slate-100 hover:bg-slate-200">新增</button>
           </div>
         );
       }
@@ -679,7 +626,7 @@
         return (
           <div className="mt-3 divide-y divide-slate-200">
             {vocab.length === 0 ? (
-              <div className="text-sm text-slate-500">尚未新增任何單字。先在上方輸入單字與解釋，再按「新增」。</div>
+              <div className="text-sm text-slate-500">尚未新增任何單字。可在文章或預覽中反白、雙擊或按 Enter 新增。</div>
             ) : (
               vocab.map((item) => (
                 <div key={item.id} className="py-2 flex items-center gap-3">
