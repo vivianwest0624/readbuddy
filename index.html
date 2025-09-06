@@ -16,7 +16,7 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <script type="text/babel" data-presets="env,react" data-plugins="proposal-optional-chaining,proposal-nullish-coalescing-operator">
-// ReadBuddy｜朗讀夥伴（可預覽版）
+// ReadBuddy｜朗讀夥伴（可預覽版）— 定義自動換行修正
 const RATE_MIN=0.25,RATE_MAX=2.0,RATE_ABS_MAX=2.5;
 const ARTICLES_KEY='rb_articles_v2',AI_PROVIDER_KEY='rb_ai_provider',AI_KEY_KEY='rb_ai_key',AI_MODEL_KEY='rb_ai_model';
 const GOOGLE_SCOPES='https://www.googleapis.com/auth/drive.appdata openid email profile';
@@ -280,7 +280,47 @@ function GoogleBar({signInGoogle,signOutGoogle,saveToDriveNow,loadFromDrive,isCl
 }
 
 function VocabEditor({addVocab}){const[term,setTerm]=React.useState('');const[definition,setDefinition]=React.useState('');return(<div className="grid grid-cols-1 md:grid-cols-5 gap-2"><input value={term} onChange={e=>setTerm(e.target.value)} placeholder="單字（必填）" className="md:col-span-2 rounded-lg border border-slate-300 p-2 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-indigo-400" aria-label="單字" /><input value={definition} onChange={e=>setDefinition(e.target.value)} placeholder="解釋（選填）" className="md:col-span-2 rounded-lg border border-slate-300 p-2 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-indigo-400" aria-label="解釋" /><button type="button" onClick={()=>{const ok=addVocab(term,definition);if(ok){setTerm('');setDefinition('')}}} className="rounded-lg border border-slate-300 px-3 py-2 bg-slate-100 hover:bg-slate-200">新增</button></div>)}
-function VocabList({vocab,playWord,removeVocab}){return(<div className="mt-3 divide-y divide-slate-200">{vocab.length===0?(<div className="text-sm text-slate-500">尚未新增任何單字。可在文章或預覽中反白、雙擊或按 Enter 新增。</div>):(vocab.map(it=>(<div key={it.id} className="py-2 flex items-center gap-3"><div className="flex-1 min-w-0"><div className="font-medium truncate">{it.term}</div>{it.definition&&<div className="text-sm text-slate-600 truncate">{it.definition}</div>}</div><div className="shrink-0 flex gap-2"><button onClick={()=>playWord(it.term,2,true,it.definition)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">🗣️ 詞+解釋</button><button onClick={()=>removeVocab(it.id)} className="px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-red-700 border border-red-200">刪除</button></div></div>)))}</div>)}
+
+function VocabList({vocab,playWord,removeVocab}){
+  return(
+    <div className="mt-3 divide-y divide-slate-200">
+      {vocab.length===0?(
+        <div className="text-sm text-slate-500">尚未新增任何單字。可在文章或預覽中反白、雙擊或按 Enter 新增。</div>
+      ):(
+        vocab.map(it=>(
+          <div key={it.id} className="py-2 flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="font-medium truncate">{it.term}</div>
+              {it.definition&&(
+                <div className="text-sm text-slate-600 whitespace-pre-line break-words" data-testid="def-text">
+                  {it.definition}
+                </div>
+              )}
+            </div>
+            <div className="shrink-0 flex gap-2">
+              <button onClick={()=>playWord(it.term,2,true,it.definition)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">🗣️ 詞+解釋</button>
+              <button onClick={()=>removeVocab(it.id)} className="px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-red-700 border border-red-200">刪除</button>
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  )
+}
+
+// Console test: ensure whitespace-pre-line is applied
+(function(){
+  try{
+    const el=document.createElement('div');
+    el.className='whitespace-pre-line';
+    el.style.display='none';
+    el.textContent='line1\nline2';
+    document.body.appendChild(el);
+    const ws=getComputedStyle(el).whiteSpace || '';
+    console.log('[TEST] definition wrap (whitespace-pre-line):', ws.includes('pre-line'));
+    document.body.removeChild(el);
+  }catch(e){console.warn('wrap test failed',e)}
+})();
 
 const root=ReactDOM.createRoot(document.getElementById('root'));root.render(<App/>);
     </script>
