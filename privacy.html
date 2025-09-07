@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>隱私權政策｜ReadBuddy 朗讀夥伴</title>
+    <!-- 可選：若要做 Search Console 網域驗證，將下行 content 換成你的代碼（沒有就刪除這行） -->
+    <meta name="google-site-verification" content="YOUR_VERIFICATION_TOKEN_HERE" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>body{cursor:auto} a,button,[role="button"],summary{cursor:pointer}</style>
+  </head>
+  <body class="min-h-screen bg-slate-50 text-slate-800">
+    <main class="max-w-3xl mx-auto p-6">
+      <header class="mb-6">
+        <h1 class="text-2xl font-semibold">隱私權政策</h1>
+        <p class="text-sm text-slate-500">最後更新：2025-09-07</p>
+      </header>
+
+      <section class="space-y-4 bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+        <p>
+          ReadBuddy（以下稱「本服務」）是一個在瀏覽器端執行的<strong>文字轉語音與生字練習</strong>工具。為了讓您了解本服務如何處理資料，特此說明如下。
+        </p>
+
+        <h2 class="text-lg font-medium">一、我們處理哪些資料</h2>
+        <ul class="list-disc list-inside space-y-1 text-sm">
+          <li>
+            <strong>本機儲存（localStorage）</strong>：您的文章、單字表、語速/語音設定、（可選）AI 供應商與模型等，僅保留在您的瀏覽器裝置，不會上傳至伺服器。
+          </li>
+          <li>
+            <strong>登入 Google 後（選用）</strong>：若您同意連結 Google 帳號，本服務將要求 <code>openid email profile</code> 與 <code>https://www.googleapis.com/auth/drive.appdata</code> 權限，用於在您的 Google Drive <em>appDataFolder</em> 內讀寫單一檔案 <code>readbuddy_articles.json</code>（包含文章與單字）。
+          </li>
+          <li>
+            <strong>第三方字典/翻譯</strong>：為產生單字解釋，本服務可能在前端直接呼叫 dictionaryapi.dev 與 MyMemory 翻譯 API；若您輸入 OpenAI API Key，則由您的瀏覽器直接連線至 OpenAI API。
+          </li>
+        </ul>
+
+        <h2 class="text-lg font-medium">二、我們如何使用資料</h2>
+        <ul class="list-disc list-inside space-y-1 text-sm">
+          <li>在本機：用於顯示、朗讀與管理您的內容，提升使用體驗。</li>
+          <li>在 Google Drive（選用）：僅於您主動點擊「上傳/下載」時進行雲端同步。</li>
+          <li>不做廣告追蹤、不出售個資、無伺服器端資料庫。</li>
+        </ul>
+
+        <h2 class="text-lg font-medium">三、資料保存與刪除</h2>
+        <ul class="list-disc list-inside space-y-1 text-sm">
+          <li>本機資料：您可在瀏覽器清除網站資料（localStorage）以刪除。</li>
+          <li>Google 權限：可於 <a class="text-indigo-600 underline" href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google 帳戶 → 安全性 → 第三方存取權</a> 撤銷 ReadBuddy 的權限。</li>
+          <li>Drive 檔案：appDataFolder 為隱藏空間；您可透過本服務未來提供的刪除功能或開發者協助刪除 <code>readbuddy_articles.json</code>。</li>
+        </ul>
+
+        <h2 class="text-lg font-medium">四、第三方服務</h2>
+        <ul class="list-disc list-inside space-y-1 text-sm">
+          <li>Google Identity Services（OAuth 2.0）、Google Drive API</li>
+          <li>dictionaryapi.dev（英文字典）</li>
+          <li>MyMemory 翻譯（英→繁中）</li>
+          <li>（可選）OpenAI API（若您自行提供 API Key）</li>
+        </ul>
+
+        <h2 class="text-lg font-medium">五、聯絡方式</h2>
+        <p class="text-sm">若您對本政策有疑問，請聯絡開發者：<a href="mailto:youremail@example.com" class="text-indigo-600 underline">vivianwest@gmail.com</a>。</p>
+      </section>
+
+      <nav class="mt-6 text-sm">
+        <a href="/" class="text-indigo-600 underline">← 回到首頁</a>
+      </nav>
+    </main>
+  </body>
+</html>
