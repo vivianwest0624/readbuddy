@@ -1,328 +1,300 @@
-<!DOCTYPE html>
-<html lang="zh-Hant">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ReadBuddy｜朗讀夥伴</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>button,[role="button"],summary,select,input[type="range"],.cursor-pointer{cursor:pointer}</style>
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
-  </head>
-  <body class="min-h-screen bg-slate-50">
-    <div id="root"></div>
+<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>ReadBuddy｜朗讀夥伴（修復＋自動測試）</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>button,[role=button],summary,select,input[type=range],.cursor-pointer{cursor:pointer}</style>
+</head>
+<body class="min-h-screen bg-slate-50">
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel" data-presets="env,react" data-plugins="proposal-optional-chaining,proposal-nullish-coalescing-operator">
+// =============================
+// ReadBuddy 精簡版（修復 Script error＋強化自動測試）
+// 修復點：runSelfTests() 內的 assert 現在以局部函式正確實作，不再有不完整的 `if (!pas...)` 語句。
+// 另外修正 JSX return 括號，避免語法錯誤。
+// =============================
 
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+// --- 常數與小工具 ---
+const K={RATE_MIN:.25,RATE_MAX:2,ABS_MAX:2.5,ART:'rb_articles_v2'};
+const S={g:(k,f="")=>{try{return localStorage.getItem(k)??f}catch{return f}},s:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}};
+const clamp=(x,a,b)=>Math.min(Math.max(x,a),b);
+// 根據狀態決定從哪一段開始：朗讀中/暫停→下一句；待機→當前句
+const decideStart=(st,i,len)=> (st==='speaking'||st==='paused')? Math.min(i+1,len): i;
+const clickStart=(i)=>i;
+const split=(t)=>{if(!t||!t.trim())return[];const tok=t.split(/([。！？!?\.\n]+)/).reduce((a,c)=>{if(/[。！？!?\.\n]+/.test(c)&&a.length)a[a.length-1]+=c;else if(c.trim())a.push(c.trim());return a;},[]);const out=[];const MAX=160;for(const s of tok){if(s.length<=MAX)out.push(s);else{let i=0;while(i<s.length){let e=Math.min(i+MAX,s.length),sl=s.slice(i,e),b=Math.max(sl.lastIndexOf(" "),sl.lastIndexOf("，"),sl.lastIndexOf(","),sl.lastIndexOf("；"),sl.lastIndexOf(";"));if(b>40)e=i+b+1;out.push(s.slice(i,e).trim());i=e}}}return out};
+const selText=()=>{const ta=document.getElementById('tts-text');if(ta&&ta.selectionEnd>ta.selectionStart)return ta.value.slice(ta.selectionStart,ta.selectionEnd);const w=window.getSelection&&window.getSelection();return w?String(w.toString()):''};
+const sanitize=(s)=>String(s||'').replace(/[\n\r\t]+/g,' ').trim().replace(/^[^A-Za-z0-9\u4e00-\u9fff]+|[^A-Za-z0-9\u4e00-\u9fff\-’' ]+$/g,'').slice(0,64);
+const parseZH=(def)=>{const m=String(def||'').match(/\bZH:\s*([^\n]+)/i);if(!m)return'';return m[1].replace(/[，,；;、]/g,'/').replace(/\s*\/?\s*或\s*/g,'/').replace(/\s{2,}/g,' ').trim()};
 
-    <script type="text/babel" data-presets="env,react" data-plugins="proposal-optional-chaining,proposal-nullish-coalescing-operator">
-// ReadBuddy｜朗讀夥伴（可預覽版）— 定義自動換行修正
-const RATE_MIN=0.25,RATE_MAX=2.0,RATE_ABS_MAX=2.5;
-const ARTICLES_KEY='rb_articles_v2',AI_PROVIDER_KEY='rb_ai_provider',AI_KEY_KEY='rb_ai_key',AI_MODEL_KEY='rb_ai_model';
-const GOOGLE_SCOPES='https://www.googleapis.com/auth/drive.appdata openid email profile';
-const GOOGLE_CLIENT_ID='178234805233-1oge8bider5e4pq50339q9kflit5u6pn.apps.googleusercontent.com';
+// --- 自動測試（純函式；不中斷 UI） ---
+function runSelfTests(){
+  let passed=0, failed=0; const logs=[];
+  const assert=(cond,msg)=>{if(!cond){failed++;logs.push('❌ '+msg)}else{passed++;logs.push('✅ '+msg)}};
+  try{
+    // decideStart 測試
+    assert(decideStart('speaking',5,10)===6,'decideStart 說話中→下一句');
+    assert(decideStart('paused',5,10)===6,'decideStart 暫停→下一句');
+    assert(decideStart('idle',5,10)===5,'decideStart 待機→當前句');
+    assert(decideStart('speaking',9,10)===10,'decideStart 最末句→越界為 len');
+
+    // clickStart 測試
+    assert(clickStart(0)===0,'clickStart 當前句');
+    assert(clickStart(5)===5,'clickStart 不偏移');
+
+    // split 測試
+    const a0=split(''); assert(Array.isArray(a0)&&a0.length===0,'split 空字串→空陣列');
+    const a1=split('Hello world. This is a test! 好嗎？\nNext line。');
+    assert(Array.isArray(a1)&&a1.length>=3,'split 基本分句');
+    const long='x'.repeat(170)+' '+"y".repeat(170); const a2=split(long);
+    assert(a2.length>=2,'split 會切割超長段落');
+    const a3=split('中文？！English?!'); assert(a3.length>=1,'split 可處理中英標點組合');
+
+    // sanitize 測試
+    assert(sanitize('  “Hello,”  ').toLowerCase()==='hello','sanitize 去除邊界符號');
+    assert(sanitize("I'm #1!")==="I'm 1",'sanitize 保留撇號與數字，移除雜訊');
+    assert(sanitize('abc-xyz').includes('-'),'sanitize 保留連字號');
+
+    // parseZH 測試
+    const zh1=parseZH('EN: sth\nZH: 甲，乙、丙 或 丁');
+    assert(zh1==='甲/乙/丙/丁','parseZH 斜線分隔同義詞');
+    const zh2=parseZH('EN: only'); assert(zh2==='','parseZH 無 ZH 行→空字串');
+
+    // clamp 測試
+    assert(clamp(3,0.25,2.5)===2.5,'clamp 上限');
+    assert(clamp(0.1,0.25,2.5)===0.25,'clamp 下限');
+    assert(clamp(1,0.25,2.5)===1,'clamp 中間值');
+
+    // 綜合：英文大量空白切詞
+    const words='word '.repeat(200); const ch=split(words); assert(ch.every(Boolean),'split 對英文空白切詞');
+  }catch(e){failed++;logs.push('❌ 測試程式錯誤：'+(e?.message||e));}
+
+  // 顯示結果（角落徽章；不干擾操作）
+  try{
+    const div=document.createElement('div');
+    div.textContent=failed?`Self-tests: ${passed} pass / ${failed} fail`:`Self-tests: ${passed} pass`;
+    div.style.cssText=`position:fixed;right:.5rem;bottom:.5rem;padding:.25rem .5rem;border-radius:.5rem;font:12px system-ui;background:${failed?'#fee2e2':'#ecfdf5'};color:${failed?'#991b1b':'#065f46'};border:1px solid ${failed?'#fecaca':'#a7f3d0'};z-index:2147483647;pointer-events:none;opacity:.9`;
+    document.addEventListener('DOMContentLoaded',()=>document.body.appendChild(div));
+  }catch{}
+
+  // 主控台列印詳細紀錄
+  console.log('\n—— ReadBuddy 自動測試 ——'); logs.forEach(l=>console.log(l)); console.log(`總結：${passed} 通過 / ${failed} 失敗`);
+  return {passed,failed};
+}
+
+// 立即執行自動測試（修復：assert 寫法正確）
+try{window.__RB_TEST_RESULT=runSelfTests()}catch{}
 
 function App(){
-  const storage=React.useMemo(()=>({get(k,f=""){try{if(typeof localStorage==="undefined")return f;const v=localStorage.getItem(k);return v==null?f:v}catch{return f}},set(k,v){try{if(typeof localStorage!=="undefined")localStorage.setItem(k,v)}catch{}}}),[]);
+  // --- 狀態 ---
+  const [text,setText]=React.useState(()=>S.g('tts_text',''));
+  const [rate,setRate]=React.useState(()=>{const x=parseFloat(S.g('tts_rate','1'));return Number.isFinite(x)?x:1});
+  const [voices,setVoices]=React.useState([]);
+  const [voiceId,setVoiceId]=React.useState(()=>S.g('tts_voiceURI',''));
+  const [status,setStatus]=React.useState('idle'); // idle|speaking|paused
+  const [idx,setIdx]=React.useState(-1);
+  const charRef=React.useRef(0); const modeRef=React.useRef('idle'); const cancelRef=React.useRef(false);
+  const chunks=React.useMemo(()=>split(text),[text]);
+  const [vocab,setVocab]=React.useState(()=>{try{return JSON.parse(S.g('tts_vocab','[]'))}catch{return[]}});
+  const [articles,setArticles]=React.useState(()=>{try{const raw=S.g(K.ART,null);return raw?JSON.parse(raw):[]}catch{return[]}});
+  const [aid,setAid]=React.useState(null); const [title,setTitle]=React.useState('');
+  const [aiOn,setAiOn]=React.useState(()=>S.g('ai_on','0')==='1');
+  const [aiKey,setAiKey]=React.useState(()=>S.g('ai_key',''));
+  const [aiModel,setAiModel]=React.useState(()=>S.g('ai_model','gpt-4o-mini'));
+  const [busy,setBusy]=React.useState(false); const [note,setNote]=React.useState('');
+  const supported=typeof window!=='undefined'&&'speechSynthesis'in window&&typeof SpeechSynthesisUtterance!=='undefined';
 
-  const[supported]=React.useState(()=>typeof window!=='undefined'&&'speechSynthesis'in window&&typeof SpeechSynthesisUtterance!=='undefined');
-  const[text,setText]=React.useState(()=>storage.get('tts_text',''));
-  const[rate,setRate]=React.useState(()=>{const x=parseFloat(storage.get('tts_rate','1.0'));return Number.isFinite(x)?x:1});
-  const[voices,setVoices]=React.useState([]);const[voiceURI,setVoiceURI]=React.useState(()=>storage.get('tts_voiceURI',''));
-  const[status,setStatus]=React.useState('idle');const[currentIndex,setCurrentIndex]=React.useState(-1);
-  const[notice,setNotice]=React.useState('');const[defLoading,setDefLoading]=React.useState(false);
-  const[vocab,setVocab]=React.useState(()=>{try{return JSON.parse(storage.get('tts_vocab','[]'))||[]}catch{return[]}});
-  const[articles,setArticles]=React.useState(()=>{try{const n=storage.get(ARTICLES_KEY,null);if(n){const a=JSON.parse(n);return Array.isArray(a)?a:[]}const o=JSON.parse(storage.get('rb_articles','[]'));return Array.isArray(o)?o:[]}catch{return[]}});
-  const[articleId,setArticleId]=React.useState(null);const[articleTitle,setArticleTitle]=React.useState('');
-  const[aiProvider,setAiProvider]=React.useState(()=>storage.get(AI_PROVIDER_KEY,'none')||'none');
-  const[aiKey,setAiKey]=React.useState(()=>storage.get(AI_KEY_KEY,''));
-  const[aiModel,setAiModel]=React.useState(()=>storage.get(AI_MODEL_KEY,'gpt-4o-mini'));
+  // --- 永續化 ---
+  React.useEffect(()=>S.s('tts_text',text),[text]);
+  React.useEffect(()=>S.s('tts_rate',String(rate)),[rate]);
+  React.useEffect(()=>S.s('tts_voiceURI',voiceId),[voiceId]);
+  React.useEffect(()=>{try{S.s('tts_vocab',JSON.stringify(vocab))}catch{}},[vocab]);
+  React.useEffect(()=>{try{S.s(K.ART,JSON.stringify(articles))}catch{}},[articles]);
+  React.useEffect(()=>{S.s('ai_on',aiOn?'1':'0');S.s('ai_key',aiKey);S.s('ai_model',aiModel)},[aiOn,aiKey,aiModel]);
 
-  const gTokRef=React.useRef('');const[gUser,setGUser]=React.useState(null);const[driveFileId,setDriveFileId]=React.useState(null);const[cloudMsg,setCloudMsg]=React.useState('');const tokenClientRef=React.useRef(null);const driveSaveTimerRef=React.useRef(null);
+  // --- 載入語音 ---
+  const loadVoices=React.useCallback(()=>{if(!supported)return;const list=window.speechSynthesis.getVoices();setVoices(list);if(!voiceId&&list[0]){const prefer=list.find(v=>/zh-TW/i.test(v.lang))||list.find(v=>/zh-CN/i.test(v.lang))||list.find(v=>/en-US/i.test(v.lang))||list[0];setVoiceId(prefer.voiceURI||prefer.name)}},[supported,voiceId]);
+  React.useEffect(()=>{if(!supported)return;loadVoices();window.speechSynthesis.onvoiceschanged=loadVoices;return()=>{window.speechSynthesis.onvoiceschanged=null}},[supported,loadVoices]);
+  const curVoice=voices.find(v=>(v.voiceURI||v.name)===voiceId)||null;
+  const sessionRef=React.useRef(0); // 播放會話版本，避免點擊/切換語速造成順序錯亂
 
-  const queueRef=React.useRef([]),cancelledRef=React.useRef(false),chunkRefs=React.useRef([]);
-  const modeRef=React.useRef('idle');const rateChangeTimerRef=React.useRef(null);const charIndexRef=React.useRef(0);const pendingCharRef=React.useRef(0);const pendingIdxRef=React.useRef(null);
+  // --- TTS ---
+  const cancelAll=()=>{if(!supported)return;sessionRef.current+=1;cancelRef.current=true;try{window.speechSynthesis.cancel()}catch{};modeRef.current='idle';setStatus('idle');setIdx(-1);charRef.current=0};
+  const speakFrom=(start=0,offset=0)=>{if(!supported||!text.trim())return;const __sess__=sessionRef.current+1;sessionRef.current=__sess__;try{window.speechSynthesis.cancel()}catch{};cancelRef.current=false;modeRef.current='article';const say=(i,off)=>{if(sessionRef.current!==__sess__||i>=chunks.length){setStatus('idle');setIdx(-1);return}let t=String(chunks[i]||'');if(off>0){if(off>=t.length)return say(i+1,0);t=t.slice(off)}t=t.replace(/[“”"＂]/g,'');const u=new SpeechSynthesisUtterance(t);if(curVoice)u.voice=curVoice;u.rate=clamp(rate,K.RATE_MIN,K.ABS_MAX);u.pitch=1;u.onstart=()=>{ if(sessionRef.current!==__sess__) return; setStatus('speaking'); setIdx(i) };u.onboundary=(e)=>{ if(sessionRef.current!==__sess__) return; if(typeof e.charIndex==='number') charRef.current=(off||0)+e.charIndex };u.onend=()=>{ if(sessionRef.current!==__sess__) return; charRef.current=0; setTimeout(()=>{ if(sessionRef.current!==__sess__) return; say(i+1,0); },30) };u.onerror=u.onend;window.speechSynthesis.speak(u)};say(start,offset)};
+  const speak=()=>speakFrom(0,0);
+  const pause=()=>{if(!supported)return;try{window.speechSynthesis.pause()}catch{};setStatus('paused')};
+  const resume=()=>{if(!supported)return;if(window.speechSynthesis.speaking){try{window.speechSynthesis.resume()}catch{};setStatus('speaking')}else{speakFrom(Math.max(idx,0),charRef.current||0)}};
+  const stopAndRestart=()=>{ // 依需求：停止→回到第一句並自動續播
+    if(!supported)return;cancelAll();setTimeout(()=>speakFrom(0,0),10)
+  };
+  const changeRate=(r)=>{const v=clamp(r,K.RATE_MIN,K.RATE_MAX);setRate(v);if(status==='speaking'&&modeRef.current==='article'){speakFrom(Math.max(idx,0),charRef.current||0)}};
 
-  React.useEffect(()=>storage.set('tts_text',text),[text]);
-  React.useEffect(()=>storage.set('tts_rate',String(rate)),[rate]);
-  React.useEffect(()=>{if(voiceURI)storage.set('tts_voiceURI',voiceURI)},[voiceURI]);
-  React.useEffect(()=>{try{storage.set('tts_vocab',JSON.stringify(vocab))}catch{}},[vocab]);
-  React.useEffect(()=>{try{storage.set(ARTICLES_KEY,JSON.stringify(articles))}catch{}},[articles]);
-  React.useEffect(()=>storage.set(AI_PROVIDER_KEY,aiProvider),[aiProvider]);
-  React.useEffect(()=>{if(aiKey)storage.set(AI_KEY_KEY,aiKey)},[aiKey]);
-  React.useEffect(()=>storage.set(AI_MODEL_KEY,aiModel||'gpt-4o-mini'),[aiModel]);
+  // --- 文章 ---
+  const save=()=>{const now=new Date().toISOString();const t=(title||'').trim()||new Date().toLocaleString();if(!aid){const id=Date.now()+Math.random().toString(36).slice(2);setArticles(p=>[{id,title:t,content:text,vocab,createdAt:now,updatedAt:now},...p]);setAid(id);setTitle(t)}else{setArticles(p=>p.map(a=>a.id===aid?{...a,title:t,content:text,vocab,updatedAt:now}:a))}};
+  const load=(id)=>{const a=articles.find(x=>x.id===id);if(!a)return;setAid(a.id);setTitle(a.title);setText(a.content||'');setVocab(Array.isArray(a.vocab)?a.vocab:[])};
+  const del=(id)=>{setArticles(p=>p.filter(x=>x.id!==id));if(id===aid){setAid(null);setTitle('');setText('');setVocab([])}};
+  const fresh=()=>{setAid(null);setTitle('');setText('');setVocab([])};
 
-  const loadVoices=React.useCallback(()=>{if(!supported)return;const list=window.speechSynthesis.getVoices();setVoices(list);if(!voiceURI&&list.length){const p=list.find(v=>/zh-TW/i.test(v.lang))||list.find(v=>/zh-CN/i.test(v.lang))||list.find(v=>/en-US/i.test(v.lang))||list[0];if(p)setVoiceURI(p.voiceURI||p.name)}},[supported,voiceURI]);
-  React.useEffect(()=>{if(!supported)return;loadVoices();window.speechSynthesis.onvoiceschanged=loadVoices;return()=>{if(window.speechSynthesis)window.speechSynthesis.onvoiceschanged=null}},[supported,loadVoices]);
-
-  const countWords=t=>{const latin=(t.match(/\S+/g)||[]).length;const cjk=t.replace(/[\x00-\x7F]/g,'').length/2;return Math.max(latin,Math.round(cjk))};
-  const estimateDuration=(txt,r)=>{const w=countWords(txt);if(!w)return"0:00";const sec=Math.ceil((w/(160*Math.max(r,RATE_MIN)))*60);return`${Math.floor(sec/60)}:${String(sec%60).padStart(2,'0')}`};
-  function splitIntoChunks(t){const parts=[];const tokens=t.split(/([。！？!?.\n]+)/).reduce((a,c)=>{if(/[。！？!?.\n]+/.test(c)&&a.length)a[a.length-1]+=c;else if(c.trim())a.push(c.trim());return a},[]);const MAX=180;for(const s of tokens){if(s.length<=MAX)parts.push(s);else{let st=0;while(st<s.length){let ed=Math.min(st+MAX,s.length);const slice=s.slice(st,ed);const back=Math.max(slice.lastIndexOf(' '),slice.search(/[，、,;；]/)>=0?slice.search(/[，、,;；](?!.*[，、,;；])/):-1);if(back>40)ed=st+back+1;parts.push(s.slice(st,ed).trim());st=ed}}}return parts}
-  const getSelectedVoice=React.useCallback(()=>voices.find(v=>(v.voiceURI||v.name)===voiceURI)||null,[voices,voiceURI]);
-  const chunks=React.useMemo(()=>splitIntoChunks((text||'').trim()),[text]);
-  React.useEffect(()=>{chunkRefs.current=chunks.map((_,i)=>chunkRefs.current[i]||React.createRef())},[chunks.length]);
-  React.useEffect(()=>{if(currentIndex<0)return;const el=chunkRefs.current[currentIndex]?.current;el&&el.scrollIntoView&&el.scrollIntoView({behavior:'smooth',block:'center'})},[currentIndex]);
-
-  const saveArticleWithVocab=(next)=>{const now=new Date().toISOString();const title=(articleTitle||'').trim()||new Date().toLocaleString();if(!articleId){const id=Date.now()+Math.random().toString(36).slice(2);const item={id,title,content:text,vocab:[...next],createdAt:now,updatedAt:now};setArticles(p=>[item,...p]);setArticleId(id);setArticleTitle(title);queueDriveSave()}else{setArticles(p=>p.map(a=>a.id===articleId?{...a,title,content:text,vocab:[...next],updatedAt:now}:a));queueDriveSave()}};
-  const updateArticle=()=>saveArticleWithVocab(vocab);
-  const newArticle=()=>{setArticleId(null);setArticleTitle('');setText('');setVocab([])};
-  const loadArticle=id=>{const a=articles.find(x=>x.id===id);if(!a)return;setArticleId(a.id);setArticleTitle(a.title);setText(a.content||'');setVocab(Array.isArray(a.vocab)?a.vocab:[])};
-  const removeArticle=id=>{setArticles(p=>p.filter(x=>x.id!==id));if(id===articleId){setArticleId(null);setArticleTitle('');setText('');setVocab([])}};
-  const renameArticle=id=>{const a=articles.find(x=>x.id===id);if(!a)return;const nv=prompt('重新命名文章標題',a.title);if(nv==null)return;const title=nv.trim();if(!title)return;const now=new Date().toISOString();setArticles(p=>p.map(x=>x.id===id?{...x,title,updatedAt:now}:x));if(id===articleId)setArticleTitle(title)};
-
-  const sanitize=s=>(s||'').replace(/[\n\r\t]+/g,' ').replace(/^\s+|\s+$/g,'').replace(/^[^A-Za-z0-9一-龯]+/,'').replace(/[^A-Za-z0-9一-龯\-’' ]+$/,'').slice(0,64);
-  const getSelFromTA=()=>{const ta=document.getElementById('tts-text');if(!ta)return'';const s=ta.selectionStart,e=ta.selectionEnd;return(typeof s==='number'&&typeof e==='number'&&e>s)?ta.value.substring(s,e):''};
-  const getSelWin=()=>{const sel=window.getSelection&&window.getSelection();return sel?String(sel.toString()):''};
-  async function addSelectedUnified(){const raw=getSelFromTA()||getSelWin();const term=sanitize(raw);if(!term){setNotice('請先選取單字/片語');return}setNotice('');setDefLoading(true);try{const def=await generateDefinition(term);let next;setVocab(prev=>{const exists=prev.some(x=>x.term.toLowerCase()===term.toLowerCase());next=exists?prev.map(x=>x.term.toLowerCase()===term.toLowerCase()?{...x,definition:def||x.definition}:x):[...prev,{id:Date.now()+Math.random().toString(36).slice(2),term,definition:def||''}];return next});saveArticleWithVocab(next||vocab);setNotice(`已加入並儲存：${term}${def?'（含解釋）':'（無解釋）'}`)}catch(e){console.error(e);let next;setVocab(prev=>{const exists=prev.some(x=>x.term.toLowerCase()===term.toLowerCase());next=exists?prev:[...prev,{id:Date.now()+Math.random().toString(36).slice(2),term,definition:''}];return next});saveArticleWithVocab(next||vocab);setNotice(`已加入並儲存：${term}（AI 解析失敗，先加入單字）`)}finally{setDefLoading(false)}}
-  async function generateDefinition(term){
-    if(aiProvider==='openai'&&aiKey){try{const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${aiKey}`},body:JSON.stringify({model:aiModel||'gpt-4o-mini',temperature:0.2,messages:[{role:'system',content:'You are a concise bilingual dictionary. Output EXACTLY two lines: "EN: <short English gloss with POS>" and on the next line "ZH: <Traditional Chinese meaning>". Each line max 25 words. One ultra-short example allowed. No extra text.'},{role:'user',content:`Define: ${term}`}]})});if(!resp.ok)throw new Error('OpenAI API error');const data=await resp.json();const txt=data?.choices?.[0]?.message?.content?.trim();if(txt)return txt}catch(e){console.warn('OpenAI error',e)}}
-    let en='';try{const r=await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(term)}`);if(r.ok){const j=await r.json();const first=Array.isArray(j)&&j[0];const m0=first?.meanings?.[0];const d0=m0?.definitions?.[0]?.definition;const pos=m0?.partOfSpeech?`(${m0.partOfSpeech}) `:'';if(d0)en=`${pos}${d0}`}}catch(e){console.warn('DictAPI error',e)}
-    let zh='';if(en){try{const tr=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(en)}&langpair=en|zh-TW`);if(tr.ok){const tj=await tr.json();const tz=tj?.responseData?.translatedText;if(tz)zh=String(tz).trim()}}catch(e){console.warn('Translate error',e)}}
-    if(en||zh)return`${en?`EN: ${en}`:''}${en&&zh?'\n':''}${zh?`ZH: ${zh}`:''}`.trim();return'';
+  // --- 單字 ---
+  async function genDef(term){ if(aiOn&&aiKey){try{const r=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${aiKey}`},body:JSON.stringify({model:aiModel,temperature:.2,messages:[{role:'system',content:'You are a concise bilingual dictionary. Output exactly two lines: EN: <short gloss with POS> and ZH: <Traditional Chinese meaning>. Max 25 words each.'},{role:'user',content:`Define: ${term}`}]})});if(r.ok){const j=await r.json();const t=j?.choices?.[0]?.message?.content?.trim();if(t)return t}}catch(e){}}
+    // 後備：英英字典 + 機翻
+    let en='';try{const r=await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(term)}`);if(r.ok){const j=await r.json();const m=j?.[0]?.meanings?.[0];const d=m?.definitions?.[0]?.definition;en=(m?.partOfSpeech?`(${m.partOfSpeech}) `:'')+(d||'')}}catch{}
+    let zh='';if(en){try{const r=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(en)}&langpair=en|zh-TW`);if(r.ok){const j=await r.json();zh=j?.responseData?.translatedText||''}}catch{}}
+    return `${en?`EN: ${en}`:''}${en&&zh?'\n':''}${zh?`ZH: ${zh}`:''}`.trim()
   }
+  async function addFromSelection(){const raw=sanitize(selText());if(!raw){setNote('請先在編輯框或預覽反白字詞');return}setNote('');setBusy(true);try{const def=await genDef(raw);setVocab(p=>{const has=p.some(x=>x.term.toLowerCase()===raw.toLowerCase());return has?p.map(x=>x.term.toLowerCase()===raw.toLowerCase()?{...x,definition:def||x.definition}:x):[{id:Date.now()+Math.random().toString(36).slice(2),term:raw,definition:def||''},...p]});save()}catch{setVocab(p=>[{id:Date.now()+Math.random().toString(36).slice(2),term:raw,definition:''},...p]);save()}finally{setBusy(false);setNote(`已加入：${raw}`)}}
+  const playAll=()=>{if(!supported||!vocab.length)return;cancelAll();modeRef.current='vocab';const v=curVoice;let i=-1;const next=()=>{i++;if(i>=vocab.length){setStatus('idle');return}const u=new SpeechSynthesisUtterance(vocab[i].term);if(v)u.voice=v;u.rate=clamp(rate,K.RATE_MIN,K.ABS_MAX);u.onstart=()=>setStatus('speaking');u.onend=()=>setTimeout(()=>{ // 每詞 3 次
+      const u2=new SpeechSynthesisUtterance(vocab[i].term);if(v)u2.voice=v;u2.rate=u.rate;u2.onend=()=>setTimeout(()=>{const u3=new SpeechSynthesisUtterance(vocab[i].term);if(v)u3.voice=v;u3.rate=u.rate;u3.onend=()=>setTimeout(next,100);window.speechSynthesis.speak(u3)},100);window.speechSynthesis.speak(u2)
+    },100);window.speechSynthesis.speak(u)};next()};
+  const rm=(id)=>setVocab(p=>p.filter(x=>x.id!==id));
 
-  const isGisReady=()=>typeof window!=='undefined'&&window.google&&google.accounts&&google.accounts.oauth2;
-  const isClientIdConfigured=()=>GOOGLE_CLIENT_ID&&!/^(YOUR_CLIENT_ID)/.test(GOOGLE_CLIENT_ID);
-  function initTokenClient(){if(!isGisReady()||!isClientIdConfigured())return null;if(!tokenClientRef.current){tokenClientRef.current=google.accounts.oauth2.initTokenClient({client_id:GOOGLE_CLIENT_ID,scope:GOOGLE_SCOPES,callback:(resp)=>{if(resp&&resp.access_token){gTokRef.current=resp.access_token;fetchGoogleUser(resp.access_token);ensureDriveFile(resp.access_token);setCloudMsg('已登入');setTimeout(()=>setCloudMsg(''),1200)}else setCloudMsg('登入失敗')}})}return tokenClientRef.current}
-  async function fetchGoogleUser(tok){try{const r=await fetch('https://www.googleapis.com/oauth2/v3/userinfo',{headers:{Authorization:`Bearer ${tok}`}});if(r.ok){const j=await r.json();setGUser({sub:j.sub,name:j.name,email:j.email,picture:j.picture})}}catch{}}
-  function signInGoogle(){if(!isClientIdConfigured()){setCloudMsg('尚未設定 Google Client ID');return}const c=initTokenClient();if(!c){setCloudMsg('Google 登入尚未就緒');return}try{c.requestAccessToken({prompt:'consent'})}catch{setCloudMsg('登入錯誤')}}
-  function signOutGoogle(){const tok=gTokRef.current;gTokRef.current='';setGUser(null);setDriveFileId(null);try{if(tok&&isGisReady())google.accounts.oauth2.revoke(tok,()=>{})}catch{}setCloudMsg('已登出');setTimeout(()=>setCloudMsg(''),1200)}
-  async function ensureDriveFile(tok){try{const q=encodeURIComponent("name = 'readbuddy_articles.json' and 'appDataFolder' in parents and trashed = false");const r=await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=appDataFolder&fields=files(id,name)`,{headers:{Authorization:`Bearer ${tok}`}});if(r.ok){const j=await r.json();if(j.files&&j.files.length){setDriveFileId(j.files[0].id);return j.files[0].id}}const boundary='b'+Math.random().toString(16).slice(2);const meta={name:'readbuddy_articles.json',parents:['appDataFolder'],mimeType:'application/json'};const initData=JSON.stringify({version:1,articles});const body=`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${initData}\r\n--${boundary}--`;const cr=await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',{method:'POST',headers:{Authorization:`Bearer ${tok}`,'Content-Type':`multipart/related; boundary=${boundary}`},body});if(cr.ok){const cj=await cr.json();setDriveFileId(cj.id);return cj.id}}catch{setCloudMsg('建立雲端檔案失敗')}return null}
-  async function loadFromDrive(){const tok=gTokRef.current;if(!tok){setCloudMsg('請先登入');return}const id=driveFileId||await ensureDriveFile(tok);if(!id)return;try{const r=await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`,{headers:{Authorization:`Bearer ${tok}`}});if(r.ok){const j=await r.json();if(j&&Array.isArray(j.articles)){setArticles(j.articles);setCloudMsg('已從雲端載入');setTimeout(()=>setCloudMsg(''),1200)}}}catch{setCloudMsg('雲端載入失敗')}}
-  async function saveToDriveNow(){const tok=gTokRef.current;if(!tok)return;const id=driveFileId||await ensureDriveFile(tok);if(!id)return;const data=JSON.stringify({version:1,articles});try{const r=await fetch(`https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media`,{method:'PATCH',headers:{Authorization:`Bearer ${tok}`,'Content-Type':'application/json'},body:data});if(r.ok){setCloudMsg('雲端已儲存');setTimeout(()=>setCloudMsg(''),1000)}}catch{setCloudMsg('雲端儲存失敗')}}
-  function queueDriveSave(){if(!gTokRef.current)return;if(driveSaveTimerRef.current)clearTimeout(driveSaveTimerRef.current);driveSaveTimerRef.current=setTimeout(saveToDriveNow,500)}
-
-  function handleRateChange(v){const clamped=Math.min(Math.max(v,RATE_MIN),RATE_MAX);setRate(clamped);if(!supported)return;if(status==='speaking'&&modeRef.current==='article'){if(rateChangeTimerRef.current)clearTimeout(rateChangeTimerRef.current);rateChangeTimerRef.current=setTimeout(()=>{try{window.speechSynthesis.cancel()}catch{}cancelledRef.current=false;const startAt=currentIndex>=0?currentIndex:0;const charAt=charIndexRef.current||0;setTimeout(()=>speakFromIndex(startAt,charAt),0)},120)}else if(status==='paused'&&modeRef.current==='article'){try{window.speechSynthesis.cancel()}catch{}pendingIdxRef.current=currentIndex>=0?currentIndex:0;pendingCharRef.current=charIndexRef.current||0;setStatus('paused')}}
-
-  function cancelAll(){if(!supported)return;cancelledRef.current=true;try{window.speechSynthesis.cancel()}catch{}queueRef.current=[];modeRef.current='idle';pendingIdxRef.current=null;setStatus('idle');setCurrentIndex(-1)}
-  function speakFromIndex(startIndex=0,charOffset=0){if(!supported||!(text||'').trim())return;cancelAll();cancelledRef.current=false;modeRef.current='article';queueRef.current=chunks;const voice=getSelectedVoice();const clamp=x=>Math.min(Math.max(x,RATE_MIN),RATE_ABS_MAX);const speakChunk=(i,off)=>{if(cancelledRef.current)return;if(i>=queueRef.current.length){setStatus('idle');setCurrentIndex(-1);return}let chunkText=String(queueRef.current[i]||'');if(off&&off>0){if(off>=chunkText.length){speakChunk(i+1,0);return}chunkText=chunkText.slice(off)}const u=new SpeechSynthesisUtterance(chunkText);if(voice)u.voice=voice;u.rate=clamp(rate);u.pitch=1.0;u.onstart=()=>{setStatus('speaking');setCurrentIndex(i);charIndexRef.current=off||0};u.onboundary=e=>{if(typeof e.charIndex==='number'){charIndexRef.current=(off||0)+e.charIndex}};u.onend=()=>{charIndexRef.current=0;setTimeout(()=>speakChunk(i+1,0),20)};u.onerror=()=>{charIndexRef.current=0;setTimeout(()=>speakChunk(i+1,0),20)};window.speechSynthesis.speak(u)};speakChunk(startIndex,charOffset||0)}
-  const speak=()=>speakFromIndex(0);const pause=()=>{if(!supported)return;window.speechSynthesis.pause();setStatus('paused')};
-  function resume(){if(!supported)return;if(window.speechSynthesis.speaking){try{window.speechSynthesis.resume()}catch{}setStatus('speaking')}else{const idx=pendingIdxRef.current!=null?pendingIdxRef.current:(currentIndex>=0?currentIndex:0);const off=pendingCharRef.current||0;pendingIdxRef.current=null;pendingCharRef.current=0;speakFromIndex(idx,off)}}
-
-  function speakSeq(arr){if(!supported||!arr.length)return;cancelAll();cancelledRef.current=false;modeRef.current='vocab';const v=getSelectedVoice();let i=-1;const next=()=>{if(cancelledRef.current)return;i++;if(i>=arr.length){setStatus('idle');return}const u=new SpeechSynthesisUtterance(arr[i]);if(v)u.voice=v;u.rate=Math.min(Math.max(rate,RATE_MIN),RATE_ABS_MAX);u.pitch=1.0;u.onstart=()=>{setStatus('speaking');setCurrentIndex(-1)};u.onend=()=>setTimeout(next,120);u.onerror=()=>setTimeout(next,120);window.speechSynthesis.speak(u)};next()}
-  const playWord=(t,times=3,withDef=false,def="")=>{const arr=[];for(let i=0;i<times;i++){arr.push(t);if(withDef&&def)arr.push(def)}speakSeq(arr)};
-  const playAllWords=(times=2,withDef=false)=>{const arr=[];vocab.forEach(it=>{for(let i=0;i<times;i++){arr.push(it.term);if(withDef&&it.definition)arr.push(it.definition)}});speakSeq(arr)};
-
-  function addVocab(term,definition){const t=(term||'').trim(),d=(definition||'').trim();if(!t)return false;setVocab(prev=>{const ex=prev.some(x=>x.term.toLowerCase()===t.toLowerCase());if(ex)return prev.map(x=>x.term.toLowerCase()===t.toLowerCase()?{...x,definition:d||x.definition}:x);return[...prev,{id:Date.now()+Math.random().toString(36).slice(2),term:t,definition:d}]});return true}
-  const removeVocab=id=>setVocab(prev=>prev.filter(x=>x.id!==id));
-
-  const isSpeaking=status==='speaking',isPaused=status==='paused';
-  const est=estimateDuration(text,rate);const selectedVoice=getSelectedVoice();
+  // --- 衍生 ---
+  const dur=(()=>{const w=(text.match(/\S+/g)||[]).length||0;const m=w/(160*Math.max(rate,K.RATE_MIN));const s=Math.ceil(m*60);return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`})();
+  const glance=vocab.map(v=>({id:v.id,term:v.term,zh:parseZH(v.definition)}));
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 text-slate-800">
-      <div className="max-w-6xl mx-auto p-6">
-        <header className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">ReadBuddy｜朗讀夥伴</h1>
-          <GoogleBar {...{signInGoogle,signOutGoogle,saveToDriveNow,loadFromDrive,isClientIdConfigured}} gUser={gUser} cloudMsg={cloudMsg} />
-        </header>
+    <div className="max-w-6xl mx-auto p-5 text-slate-800">
+      <h1 className="text-2xl md:text-3xl font-semibold mb-4">ReadBuddy｜朗讀夥伴</h1>
+      {!supported&&<div className="p-3 mb-4 rounded-lg bg-red-50 text-red-700 border border-red-200">此瀏覽器不支援 SpeechSynthesis，建議用桌面版 Chrome/Edge。</div>}
 
-        {!supported&&(<div className="p-4 rounded-xl bg-red-50 text-red-700 border border-red-200 mb-6">你的瀏覽器目前不支援語音合成（SpeechSynthesis）。建議使用 Chrome / Edge（桌面版）。</div>)}
+      <div className="grid gap-4 md:grid-cols-3">
+        {/* 左側：編輯、控制、預覽 */}
+        <div className="md:col-span-2 space-y-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+            <div className="grid gap-2 md:grid-cols-3 mb-2 items-center">
+              <div className="md:col-span-2"><label className="text-sm">文章標題</label>
+                <input id="article-title" value={title} onChange={e=>setTitle(e.target.value)} placeholder="未命名文章"
+                  className="w-full mt-1 rounded-xl border border-slate-300 p-2 bg-slate-50/50 focus:ring-2 focus:ring-indigo-400"/></div>
+              <div className="flex gap-2 md:justify-end"><button onClick={save} className="px-3 py-2 rounded-xl bg-indigo-600 text-white">💾 儲存</button><button onClick={fresh} className="px-3 py-2 rounded-xl bg-slate-100">📝 新文章</button></div>
+            </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="md:col-span-2">
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
-              <div className="mb-3 grid grid-cols-1 md:grid-cols-3 gap-2 items-center">
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium mb-1" htmlFor="article-title">文章標題</label>
-                  <input id="article-title" value={articleTitle} onChange={e=>setArticleTitle(e.target.value)} placeholder="未命名文章" className="w-full rounded-xl border border-slate-300 p-2 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
-                </div>
-                <div className="flex gap-2 md:justify-end flex-wrap">
-                  <button onClick={updateArticle} className="px-3 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700">💾 儲存</button>
-                  <button onClick={newArticle} className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200">📝 新文章</button>
-                </div>
+            {/* 我的文章（精簡） */}
+            <div className="mb-3">
+              <div className="flex items-center justify-between mb-1"><h3 className="text-sm font-medium">我的文章</h3><span className="text-xs text-slate-500">{articles.length} 篇</span></div>
+              <div className="max-h-32 overflow-auto rounded-xl border border-slate-200 divide-y bg-white">
+                {articles.length===0? <div className="p-3 text-sm text-slate-500">尚未儲存文章。</div> : articles.map(a=> (
+                  <div key={a.id} className={`p-2 flex items-center gap-2 ${a.id===aid?'bg-indigo-50':''}`}>
+                    <button className="flex-1 text-left truncate" onClick={()=>load(a.id)} title={new Date(a.updatedAt).toLocaleString()}>
+                      <div className="truncate font-medium">{a.title}</div>
+                      <div className="text-xs text-slate-500">更新：{new Date(a.updatedAt).toLocaleString()}</div>
+                    </button>
+                    <button onClick={()=>del(a.id)} className="px-2 py-1 text-xs rounded bg-red-50 text-red-700 border border-red-200">刪除</button>
+                  </div>))}
               </div>
+            </div>
 
-              <div className="mb-3">
-                <div className="flex items-center justify-between mb-1"><h3 className="text-sm font-medium">我的文章</h3><span className="text-xs text-slate-500">{articles.length} 篇</span></div>
-                <div className="max-h-36 overflow-auto divide-y divide-slate-200 rounded-xl border border-slate-200 bg-slate-50">
-                  {articles.length===0?(<div className="p-3 text-sm text-slate-500">尚未儲存任何文章。輸入標題與內容後按「儲存」。</div>):(
-                    articles.map(a=>(
-                      <div key={a.id} className={`p-2 flex items-center gap-2 ${a.id===articleId?'bg-indigo-50':'bg-white'}`}>
-                        <button className="flex-1 text-left truncate cursor-pointer" onClick={()=>loadArticle(a.id)} title={new Date(a.updatedAt).toLocaleString()}>
-                          <div className="font-medium truncate">{a.title}</div>
-                          <div className="text-xs text-slate-500">更新：{new Date(a.updatedAt).toLocaleString()} · 單字 {Array.isArray(a.vocab)?a.vocab.length:0}</div>
-                        </button>
-                        <button className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" onClick={()=>renameArticle(a.id)}>重新命名</button>
-                        <button className="px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-xs text-red-700 border border-red-200" onClick={()=>removeArticle(a.id)}>刪除</button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
+            {/* 編輯框 */}
+            <div className="flex items-center justify-between mb-1"><label htmlFor="tts-text" className="font-medium">輸入文字</label><div className="text-xs text-slate-500">{text.length} 字 · 預估 {dur}</div></div>
+            <textarea id="tts-text" value={text} onChange={e=>setText(e.target.value)} onDoubleClick={addFromSelection}
+              onKeyDown={e=>{if(e.key==='Enter'){const ta=e.target;if(ta.selectionEnd>ta.selectionStart){e.preventDefault();addFromSelection()}}}}
+              placeholder="貼上或輸入要朗讀的文字…（反白、雙擊或 Enter 可加入單字）"
+              className="w-full h-40 md:h-44 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-400 p-3 bg-slate-50/50"/>
 
-              <div className="flex items-center justify-between mb-2">
-                <label htmlFor="tts-text" className="font-medium">輸入文字</label>
-                <div className="text-xs text-slate-500">{text.length} 字 · 預估 {est}</div>
+            {/* 控制列（置於預覽上方） */}
+            <div className="flex items-center justify-between mt-3">
+              <div className="flex gap-2">
+                <button onClick={speak} disabled={!supported||!text.trim()} className="px-4 py-2 rounded-xl bg-indigo-600 text-white disabled:opacity-40">▶️ 朗讀</button>
+                {status==='speaking'? <button onClick={pause} className="px-4 py-2 rounded-xl bg-slate-100">⏸ 暫停</button>
+                 : status==='paused'? <button onClick={resume} className="px-4 py-2 rounded-xl bg-slate-100">⏯ 繼續</button>
+                 : <button disabled className="px-4 py-2 rounded-xl bg-slate-50 text-slate-400 border">⏸ 暫停</button>}
+                <button onClick={stopAndRestart} className="px-4 py-2 rounded-xl bg-slate-100">⏹ 停止（重頭）</button>
               </div>
-              <textarea id="tts-text" value={text} onChange={e=>setText(e.target.value)} onDoubleClick={()=>addSelectedUnified()} onKeyDown={e=>{if(e.key==='Enter'){const ta=e.target;const s=ta.selectionStart,en=ta.selectionEnd;if(typeof s==='number'&&typeof en==='number'&&en>s){e.preventDefault();addSelectedUnified()}}}} placeholder="貼上或輸入要唸出來的文字…（反白、雙擊或按 Enter 可加入 Vocabulary）" className="w-full h-40 md:h-44 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 p-3 resize-vertical bg-slate-50/50" aria-label="輸入要朗讀的文字" />
+              <div className="text-xs text-slate-500">{idx>=0?`進度：${idx+1}/${chunks.length}`:`段落：${chunks.length}`}</div>
+            </div>
 
-              <div className="mt-4">
-                <div className="flex items-center justify-between mb-2"><h2 className="font-medium">預覽（同步高亮）</h2><div className="text-xs text-slate-500">段落數：{chunks.length} · 進度：{currentIndex>=0?currentIndex+1:0}/{chunks.length}</div></div>
-                <div className="max-h-64 overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2" data-testid="preview-pane" tabIndex={0} onKeyDown={e=>{if(e.key==='Enter'){const s=(window.getSelection&&window.getSelection().toString().trim());if(s){e.preventDefault();addSelectedUnified()}}}}>
-                  {chunks.length===0&&(<div className="text-sm text-slate-500">無文字，請在上方輸入內容。</div>)}
-                  {chunks.map((c,i)=>{const active=i===currentIndex&&(isSpeaking||isPaused);return(
-                    <div key={i} ref={chunkRefs.current[i]} data-active={active?'true':'false'} className={`text-sm leading-relaxed rounded-lg border p-2 cursor-pointer select-text ${active?'bg-yellow-50 border-yellow-300 ring-2 ring-yellow-200':'bg-white border-slate-200 hover:bg-slate-50'}`} onClick={e=>{if(e.detail>1)return;const hasSel=(window.getSelection&&window.getSelection().toString().trim().length>0);if(hasSel)return;speakFromIndex(i)}} onDoubleClick={e=>{e.preventDefault();e.stopPropagation();addSelectedUnified()}} title={active?'正在朗讀；可反白或雙擊選字（新增單字），或點擊從此段重播':'可反白或雙擊選字（新增單字）；點擊從這一段開始朗讀'}>
-                      <span className="opacity-60 mr-2">[{i+1}]</span>
-                      <span>{c}</span>
-                    </div>)})}
-                </div>
-                {notice&&<div className="mt-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1">{notice}</div>}
+            {/* 預覽（同步高亮、點段落從此播放；雙擊選字加入） */}
+            <div className="mt-2">
+              <div className="flex items-center justify-between mb-1"><h2 className="font-medium">預覽</h2><div className="text-xs text-slate-500">{idx>=0?`${idx+1}/${chunks.length}`:`${chunks.length} 段`}</div></div>
+              <div className="max-h-64 overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2" tabIndex={0}
+                onKeyDown={e=>{if(e.key==='Enter'){const s=(window.getSelection&&window.getSelection().toString().trim());if(s){e.preventDefault();addFromSelection()}}}}>
+                {chunks.length===0&&<div className="text-sm text-slate-500">無文字。</div>}
+                {chunks.map((c,i)=>{const active=i===idx&&(status==='speaking'||status==='paused');return (
+                  <div key={i} className={`text-sm leading-relaxed rounded-lg border p-2 select-text ${active?'bg-yellow-50 border-yellow-300 ring-2 ring-yellow-200':'bg-white border-slate-200 hover:bg-slate-50'}`}
+                    title={active?'正在朗讀；雙擊選字加入，或點此段重播':'雙擊選字加入；點擊此段播放'}
+                    onClick={e=>{if((window.getSelection&&window.getSelection().toString().trim()))return; speakFrom(i,0);}}
+                    onDoubleClick={e=>{e.preventDefault();addFromSelection()}}>
+                    <span className="opacity-60 mr-2">[{i+1}]</span><span>{c}</span>
+                  </div>)})}
               </div>
+              {note&&<div className="mt-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">{note}</div>}
+            </div>
+          </div>
+        </div>
+
+        {/* 右側：語音、語速、單字速覽、AI 設定（精簡） */}
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-4">
+          <div>
+            <label className="block font-medium mb-1">語音</label>
+            <select value={voiceId} onChange={e=>setVoiceId(e.target.value)} className="w-full rounded-xl border border-slate-300 p-2 focus:ring-2 focus:ring-indigo-400">
+              {voices.length===0&&<option>（載入中…）</option>}
+              {voices.map(v=> <option key={v.voiceURI||v.name} value={v.voiceURI||v.name}>{v.name} — {v.lang}</option>)}
+            </select>
+            {curVoice&&<div className="mt-1 text-xs text-slate-500">目前：{curVoice.name}（{curVoice.lang}）</div>}
+          </div>
+          <div>
+            <label className="block font-medium mb-1">語速（{rate.toFixed(2)}×）</label>
+            <input type="range" min={K.RATE_MIN} max={K.RATE_MAX} step={0.05} value={rate} onChange={e=>changeRate(parseFloat(e.target.value))} className="w-full"/>
+            <div className="flex justify-between text-xs text-slate-500"><span>更慢（{K.RATE_MIN}×）</span><span>更快（{K.RATE_MAX}×）</span></div>
+            <div className="flex flex-wrap gap-2 mt-2 text-xs">
+              {[.25,.5,1,1.5,2].map(v=> <button key={v} onClick={()=>changeRate(v)} className="px-2 py-1 rounded bg-slate-100">{v===.25?'超慢 ':''}{v}×</button>)}
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
-            <div className="space-y-4">
-              <div>
-                <label className="block font-medium mb-1">語音（Voice）</label>
-                <select value={voiceURI} onChange={e=>setVoiceURI(e.target.value)} className="w-full rounded-xl border border-slate-300 p-2 focus:outline-none focus:ring-2 focus:ring-indigo-400" aria-label="選擇語音">
-                  {voices.length===0&&<option>（正在載入可用語音…）</option>}
-                  {voices.map(v=>(<option key={v.voiceURI||v.name} value={v.voiceURI||v.name}>{v.name} — {v.lang}</option>))}
+          {/* 單字速覽（僅顯示 英文 / 中文同義詞） */}
+          <div className="pt-2 border-t border-slate-200">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-medium">單字速覽</h3>
+              <div className="flex gap-2 text-sm">
+                <button onClick={addFromSelection} disabled={busy} className="px-3 py-1.5 rounded-full bg-emerald-600 text-white disabled:opacity-50">{busy?'⏳ 解析中…':'🤖 從選取新增'}</button>
+                <button onClick={playAll} className="px-3 py-1.5 rounded-full bg-indigo-600 text-white">▶️ 全播（每詞 3x）</button>
+              </div>
+            </div>
+            {glance.length===0? <div className="text-sm text-slate-500">尚未加入單字。雙擊文章中的字詞可加入。</div> :
+              <div className="max-h-60 overflow-auto rounded-xl border border-slate-200 divide-y">
+                {glance.map(g=> (
+                  <div key={g.id} className="flex items-center gap-2 p-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium truncate">{g.term}</div>
+                      {g.zh&&<div className="text-xs text-slate-500 truncate">{g.zh}</div>}
+                    </div>
+                    <button onClick={()=>rm(g.id)} className="px-2 py-1 text-xs rounded bg-red-50 text-red-700 border border-red-200">刪</button>
+                  </div>))}
+              </div>
+            }
+          </div>
+
+          {/* AI 設定（可選） */}
+          <details className="rounded-xl bg-slate-50 p-3">
+            <summary className="cursor-pointer select-none font-medium">AI 設定（可選）</summary>
+            <div className="mt-3 space-y-2 text-sm">
+              <label className="block">是否使用 OpenAI
+                <select value={aiOn? '1':'0'} onChange={e=>setAiOn(e.target.value==='1')} className="mt-1 w-full rounded border p-1">
+                  <option value="0">不使用（僅字典備援）</option>
+                  <option value="1">使用 OpenAI（需 API Key）</option>
                 </select>
-                {selectedVoice&&(<div className="mt-1 text-xs text-slate-500">目前：{selectedVoice.name}（{selectedVoice.lang}）</div>)}
-              </div>
-
-              <div>
-                <label htmlFor="rate" className="block font-medium mb-1">語速（{rate.toFixed(2)}×）</label>
-                <input id="rate" type="range" min={RATE_MIN} max={RATE_MAX} step={0.05} value={rate} onChange={e=>handleRateChange(parseFloat(e.target.value))} className="w-full" aria-label="調整語速" />
-                <div className="flex justify-between text-xs text-slate-500"><span>更慢（{RATE_MIN}×）</span><span>更快（{RATE_MAX}×）</span></div>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  <button onClick={()=>handleRateChange(0.25)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">超慢 0.25×</button>
-                  <button onClick={()=>handleRateChange(0.5)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">慢速×2（0.5×）</button>
-                  <button onClick={()=>handleRateChange(1.0)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">正常 1.0×</button>
-                  <button onClick={()=>handleRateChange(1.5)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">1.5×</button>
-                  <button onClick={()=>handleRateChange(2.0)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-xs" type="button">2.0×</button>
-                </div>
-              </div>
-
-              <div className="flex gap-2 pt-2">
-                <button onClick={speak} disabled={!supported||(text||'').trim().length===0} className="flex-1 px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed" aria-label="開始朗讀">▶️ 朗讀</button>
-                {isSpeaking?(<button onClick={pause} className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200" aria-label="暫停朗讀">⏸ 暫停</button>):isPaused?(<button onClick={resume} className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200" aria-label="繼續朗讀">⏯ 繼續</button>):(<button disabled className="px-4 py-2 rounded-xl bg-slate-50 text-slate-400 border border-slate-200" aria-disabled>⏸ 暫停</button>)}
-                <button onClick={cancelAll} className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200" aria-label="停止朗讀">⏹ 停止</button>
-              </div>
-              {(isSpeaking||isPaused)&&(<div className="text-xs text-slate-500">進度：{currentIndex+1}/{chunks.length}</div>)}
-
-              <div className="pt-2 border-t border-slate-200">
-                <details className="rounded-xl bg-slate-50 p-3">
-                  <summary className="cursor-pointer select-none font-medium">AI 設定（可選）</summary>
-                  <div className="mt-3 space-y-2 text-sm">
-                    <label className="block">提供者
-                      <select value={aiProvider} onChange={e=>setAiProvider(e.target.value)} className="mt-1 w-full rounded border p-1">
-                        <option value="none">不使用（僅字典備援）</option>
-                        <option value="openai">OpenAI（需 API Key）</option>
-                      </select>
-                    </label>
-                    {aiProvider==='openai'&&(<>
-                      <label className="block">API Key
-                        <input type="password" value={aiKey} onChange={e=>setAiKey(e.target.value)} placeholder="sk-..." className="mt-1 w-full rounded border p-1" />
-                      </label>
-                      <label className="block">Model
-                        <input type="text" value={aiModel} onChange={e=>setAiModel(e.target.value)} className="mt-1 w-full rounded border p-1" />
-                      </label>
-                      <div className="text-[11px] text-slate-500">提醒：前端存放 Key 僅供個人測試，正式上線請改用後端代理。</div>
-                    </>)}
-                  </div>
-                </details>
-              </div>
+              </label>
+              {aiOn&&<>
+                <label className="block">API Key
+                  <input type="password" value={aiKey} onChange={e=>setAiKey(e.target.value)} placeholder="sk-..." className="mt-1 w-full rounded border p-1"/>
+                </label>
+                <label className="block">Model
+                  <input value={aiModel} onChange={e=>setAiModel(e.target.value)} className="mt-1 w-full rounded border p-1"/>
+                </label>
+                <div className="text-[11px] text-slate-500">提醒：前端存 Key 有風險，僅供個人使用；上線請改後端代理。</div>
+              </>}
             </div>
-          </div>
+          </details>
         </div>
-
-        <div className="mt-6 bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-medium">單字與解釋（Vocabulary）</h2>
-            <div className="flex items-center gap-2 text-sm">
-              <button onClick={()=>addSelectedUnified()} disabled={defLoading} className="px-3 py-1.5 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50">{defLoading?'⏳ 解析中…':'🤖 從選取新增（含AI解釋）'}</button>
-              <button onClick={()=>playAllWords(2,false)} className="px-3 py-1.5 rounded-full bg-indigo-600 text-white hover:bg-indigo-700">▶️ 全部播放（每詞 2x）</button>
-            </div>
-          </div>
-          <VocabEditor addVocab={addVocab} />
-          <VocabList vocab={vocab} playWord={playWord} removeVocab={removeVocab} />
-        </div>
-
-        <div className="mt-6 bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
-          <h2 className="font-medium mb-2">使用說明</h2>
-          <ul className="list-disc list-inside text-sm text-slate-600 space-y-1">
-            <li>在編輯框或預覽區<strong>雙擊</strong>單字（或反白選取、<strong>按 Enter</strong>）即可加入 Vocabulary，並自動產生<strong>英文＋繁中</strong>雙語解釋（失敗則僅加入單字）。</li>
-            <li>加入後會自動把<strong>文章＋單字表</strong>一起儲存；載入文章時會帶出其專屬單字表。</li>
-            <li>朗讀支援同步高亮與段落點選播放；語速在朗讀中可平滑調整不中斷。</li>
-            <li>登入後可把文章清單同步到個人 Google Drive 的 appDataFolder（本機資料仍會保留）。</li>
-          </ul>
-        </div>
-
-        <footer className="py-6 text-center text-xs text-slate-400">© {new Date().getFullYear()} ReadBuddy｜朗讀夥伴</footer>
       </div>
+
+      <footer className="py-6 text-center text-xs text-slate-400">
+        <div>© {new Date().getFullYear()} ReadBuddy｜朗讀夥伴</div>
+        <a href="/privacy.html" className="underline text-slate-500 hover:text-slate-700">Privacy Policy｜隱私權政策</a>
+      </footer>
     </div>
-  )
+  );
 }
-
-function GoogleBar({signInGoogle,signOutGoogle,saveToDriveNow,loadFromDrive,isClientIdConfigured,gUser,cloudMsg}){
-  return (
-    <div className="flex items-center gap-2 text-sm">
-      {gUser?(
-        <>
-          {gUser.picture&&(<img src={gUser.picture} alt="avatar" className="w-6 h-6 rounded-full" />)}
-          <span className="text-slate-600 max-w-[12rem] truncate" title={gUser.email||gUser.name||''}>{gUser.email||gUser.name||'已登入'}</span>
-          <button onClick={saveToDriveNow} className="px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700">上傳</button>
-          <button onClick={loadFromDrive} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">下載</button>
-          <button onClick={signOutGoogle} className="px-2 py-1 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100">登出</button>
-          {cloudMsg&&(<span className="text-xs text-slate-700 bg-slate-100 border border-slate-200 rounded px-2 py-0.5">{cloudMsg}</span>)}
-        </>
-      ):(
-        <div className="flex items-center gap-2">
-          {!isClientIdConfigured()&&<span className="text-xs text-red-600">請在常數 GOOGLE_CLIENT_ID 中填入你的 Client ID</span>}
-          <button onClick={signInGoogle} className="px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700" disabled={!isClientIdConfigured()}>登入 Google</button>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function VocabEditor({addVocab}){const[term,setTerm]=React.useState('');const[definition,setDefinition]=React.useState('');return(<div className="grid grid-cols-1 md:grid-cols-5 gap-2"><input value={term} onChange={e=>setTerm(e.target.value)} placeholder="單字（必填）" className="md:col-span-2 rounded-lg border border-slate-300 p-2 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-indigo-400" aria-label="單字" /><input value={definition} onChange={e=>setDefinition(e.target.value)} placeholder="解釋（選填）" className="md:col-span-2 rounded-lg border border-slate-300 p-2 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-indigo-400" aria-label="解釋" /><button type="button" onClick={()=>{const ok=addVocab(term,definition);if(ok){setTerm('');setDefinition('')}}} className="rounded-lg border border-slate-300 px-3 py-2 bg-slate-100 hover:bg-slate-200">新增</button></div>)}
-
-function VocabList({vocab,playWord,removeVocab}){
-  return(
-    <div className="mt-3 divide-y divide-slate-200">
-      {vocab.length===0?(
-        <div className="text-sm text-slate-500">尚未新增任何單字。可在文章或預覽中反白、雙擊或按 Enter 新增。</div>
-      ):(
-        vocab.map(it=>(
-          <div key={it.id} className="py-2 flex items-start gap-3">
-            <div className="flex-1 min-w-0">
-              <div className="font-medium truncate">{it.term}</div>
-              {it.definition&&(
-                <div className="text-sm text-slate-600 whitespace-pre-line break-words" data-testid="def-text">
-                  {it.definition}
-                </div>
-              )}
-            </div>
-            <div className="shrink-0 flex gap-2">
-              <button onClick={()=>playWord(it.term,2,true,it.definition)} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">🗣️ 詞+解釋</button>
-              <button onClick={()=>removeVocab(it.id)} className="px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-red-700 border border-red-200">刪除</button>
-            </div>
-          </div>
-        ))
-      )}
-    </div>
-  )
-}
-
-// Console test: ensure whitespace-pre-line is applied
-(function(){
-  try{
-    const el=document.createElement('div');
-    el.className='whitespace-pre-line';
-    el.style.display='none';
-    el.textContent='line1\nline2';
-    document.body.appendChild(el);
-    const ws=getComputedStyle(el).whiteSpace || '';
-    console.log('[TEST] definition wrap (whitespace-pre-line):', ws.includes('pre-line'));
-    document.body.removeChild(el);
-  }catch(e){console.warn('wrap test failed',e)}
-})();
 
 const root=ReactDOM.createRoot(document.getElementById('root'));root.render(<App/>);
-    </script>
-  </body>
-</html>
+</script>
+</body></html>
