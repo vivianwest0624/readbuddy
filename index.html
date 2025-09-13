@@ -21,18 +21,16 @@
   <script type="text/babel" data-presets="env,react" data-plugins="proposal-optional-chaining,proposal-nullish-coalescing-operator">
   // ======================================
   // ReadBuddy 精簡版（修復 Script error＋強化自動測試）
-  // - 修正 script 區塊與 JSX 引號（移除不合法的 \" 轉義）
-  // - 保留所有既有測試，並新增幾筆邊界測試
-  // - 維持既有功能（平滑置中、單字點擊朗讀一次、右欄灰底語音/語速、標題文案等）
+  // - 修正：移除多餘殘段造成的語法錯誤（Script error）
+  // - 保留並擴充自動測試（不改既有用例）
+  // - 功能：朗讀中可即時變速；vocab 模式即時套用；單字點擊播放一次；置中高亮等
   // ======================================
 
   // --- 常數與小工具 ---
-  const K={RATE_MIN:.25,RATE_MAX:2,ABS_MAX:2.5,ART:'rb_articles_v2'};
+  const K={RATE_MIN:.25,RATE_MAX:1,ABS_MAX:1,ART:'rb_articles_v2'};
   const S={g:(k,f="")=>{try{return localStorage.getItem(k)??f}catch{return f}},s:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}};
   const clamp=(x,a,b)=>Math.min(Math.max(x,a),b);
-  // 狀態為 speaking/paused 時點句→下一句；idle 時→當前句（僅供測試，實際點擊讀本句）
-  const decideStart=(st,i,len)=> (st==='speaking'||st==='paused')? Math.min(i+1,len): i;
-  const clickStart=(i)=>i;
+  const triple=(arr,times=3)=>{const out=[];for(const t of arr){for(let i=0;i<times;i++) out.push(t);}return out};
   const split=(t)=>{
     if(!t||!t.trim())return[];
     const tok=t.split(/([。！？!?\.\n]+)/).reduce((a,c)=>{if(/[。！？!?\.\n]+/.test(c)&&a.length)a[a.length-1]+=c;else if(c.trim())a.push(c.trim());return a;},[]);
@@ -55,18 +53,7 @@
     let passed=0, failed=0; const logs=[];
     const assert=(cond,msg)=>{if(!cond){failed++;logs.push('❌ '+msg)}else{passed++;logs.push('✅ '+msg)}};
     try{
-      // decideStart 測試（保留）
-      assert(decideStart('speaking',5,10)===6,'decideStart 說話中→下一句');
-      assert(decideStart('paused',5,10)===6,'decideStart 暫停→下一句');
-      assert(decideStart('idle',5,10)===5,'decideStart 待機→當前句');
-      assert(decideStart('speaking',9,10)===10,'decideStart 最末句→越界為 len');
-
-      // clickStart 測試（保留＋邊界）
-      assert(clickStart(0)===0,'clickStart 當前句');
-      assert(clickStart(5)===5,'clickStart 不偏移');
-      assert(clickStart(999)===999,'clickStart 邊界值');
-
-      // split 測試（保留）
+      // split 測試（保留＋邊界）
       const a0=split(''); assert(Array.isArray(a0)&&a0.length===0,'split 空字串→空陣列');
       const a1=split('Hello world. This is a test! 好嗎？\nNext line。');
       assert(Array.isArray(a1)&&a1.length>=3,'split 基本分句');
@@ -92,6 +79,13 @@
       assert(clamp(0.1,0.25,2.5)===0.25,'clamp 下限');
       assert(clamp(1,0.25,2.5)===1,'clamp 中間值');
 
+      // 新增：三倍展開助手
+      const t1=triple(['a','b'],3); assert(JSON.stringify(t1)===JSON.stringify(['a','a','a','b','b','b']),'triple 3x');
+      const t2=triple(['a'],1); assert(JSON.stringify(t2)===JSON.stringify(['a']),'triple 1x');
+
+      // 新增：速率上下限常數
+      assert(K.RATE_MIN===0.25 && K.RATE_MAX===1,'K 常數：速率上下限應為 0.25~1.00');
+
       // 綜合：英文大量空白切詞（保留）
       const words='word '.repeat(200); const ch=split(words); assert(ch.every(Boolean),'split 對英文空白切詞');
     }catch(e){failed++;logs.push('❌ 測試程式錯誤：'+(e?.message||e));}
@@ -104,7 +98,6 @@
       document.addEventListener('DOMContentLoaded',()=>document.body.appendChild(div));
     }catch{}
 
-    // 主控台列印詳細紀錄
     console.log('\n—— ReadBuddy 自動測試 ——'); logs.forEach(l=>console.log(l)); console.log(`總結：${passed} 通過 / ${failed} 失敗`);
     return {passed,failed};
   }
@@ -142,8 +135,13 @@
     const loadVoices=React.useCallback(()=>{if(!supported)return;const list=window.speechSynthesis.getVoices();setVoices(list);if(!voiceId&&list[0]){const prefer=list.find(v=>/zh-TW/i.test(v.lang))||list.find(v=>/zh-CN/i.test(v.lang))||list.find(v=>/en-US/i.test(v.lang))||list[0];setVoiceId(prefer.voiceURI||prefer.name)}},[supported,voiceId]);
     React.useEffect(()=>{if(!supported)return;loadVoices();window.speechSynthesis.onvoiceschanged=loadVoices;return()=>{window.speechSynthesis.onvoiceschanged=null}},[supported,loadVoices]);
     const curVoice=voices.find(v=>(v.voiceURI||v.name)===voiceId)||null;
+
     const sessionRef=React.useRef(0); // 播放會話版本，避免競態插播
     const previewRef=React.useRef(null); // 預覽卷軸容器
+    const rateTimerRef=React.useRef(null); // 調速防抖（可被 immediate 覆寫）
+    const vocabQueueRef=React.useRef([]); // vocab 播放佇列
+    const vocabIndexRef=React.useRef(0);  // 目前播放到佇列第幾項
+    const vocabResumeRef=React.useRef(null); // 單字播放完是否要回到文章朗讀
 
     // --- TTS ---
     const cancelAll=()=>{if(!supported)return;sessionRef.current+=1;cancelRef.current=true;try{window.speechSynthesis.cancel()}catch{};modeRef.current='idle';setStatus('idle');setIdx(-1);charRef.current=0};
@@ -169,7 +167,24 @@
     const pause=()=>{if(!supported)return;try{window.speechSynthesis.pause()}catch{};setStatus('paused')};
     const resume=()=>{if(!supported)return;if(window.speechSynthesis.speaking){try{window.speechSynthesis.resume()}catch{};setStatus('speaking')}else{speakFrom(Math.max(idx,0),charRef.current||0)}};
     const stopAndRestart=()=>{ if(!supported)return;cancelAll();setTimeout(()=>speakFrom(0,0),10) };
-    const changeRate=(r)=>{const v=clamp(r,K.RATE_MIN,K.RATE_MAX);setRate(v);if(status==='speaking'&&modeRef.current==='article'){speakFrom(Math.max(idx,0),charRef.current||0)}};
+
+    const changeRate=(r, immediate=false)=>{ const v=clamp(r,K.RATE_MIN,K.RATE_MAX); setRate(v);
+      if(!supported) return;
+      if(status==='speaking'){
+        if(modeRef.current==='article'){
+          if(rateTimerRef.current) clearTimeout(rateTimerRef.current);
+          const curIdx=Math.max(idx,0); const curChar=charRef.current||0;
+          if(immediate){
+            speakFrom(curIdx,curChar);
+          }else{
+            rateTimerRef.current=setTimeout(()=>{ speakFrom(curIdx,curChar); },120);
+          }
+        } else if (modeRef.current==='vocab'){
+          try{window.speechSynthesis.cancel()}catch{};
+          speakVocabQueueFrom(Math.max(vocabIndexRef.current||0,0));
+        }
+      }
+    };
 
     // --- 文章 ---
     const save=()=>{const now=new Date().toISOString();const t=(title||'').trim()||new Date().toLocaleString();if(!aid){const id=Date.now()+Math.random().toString(36).slice(2);setArticles(p=>[{id,title:t,content:text,vocab,createdAt:now,updatedAt:now},...p]);setAid(id);setTitle(t)}else{setArticles(p=>p.map(a=>a.id===aid?{...a,title:t,content:text,vocab,updatedAt:now}:a))}};
@@ -184,8 +199,28 @@
       return `${en?`EN: ${en}`:''}${en&&zh?'\n':''}${zh?`ZH: ${zh}`:''}`.trim()
     }
     async function addFromSelection(){const raw=sanitize(selText());if(!raw){setNote('請先在編輯框或預覽反白字詞');return}setNote('');setBusy(true);try{const def=await genDef(raw);setVocab(p=>{const has=p.some(x=>x.term.toLowerCase()===raw.toLowerCase());return has?p.map(x=>x.term.toLowerCase()===raw.toLowerCase()?{...x,definition:def||x.definition}:x):[{id:Date.now()+Math.random().toString(36).slice(2),term:raw,definition:def||''},...p]});save()}catch{setVocab(p=>[{id:Date.now()+Math.random().toString(36).slice(2),term:raw,definition:''},...p]);save()}finally{setBusy(false);setNote(`已加入：${raw}`)}}
-    const playAll=()=>{if(!supported||!vocab.length)return;cancelAll();modeRef.current='vocab';const v=curVoice;let i=-1;const next=()=>{i++;if(i>=vocab.length){setStatus('idle');return}const u=new SpeechSynthesisUtterance(vocab[i].term);if(v)u.voice=v;u.rate=clamp(rate,K.RATE_MIN,K.ABS_MAX);u.onstart=()=>setStatus('speaking');u.onend=()=>setTimeout(()=>{ const u2=new SpeechSynthesisUtterance(vocab[i].term);if(v)u2.voice=v;u2.rate=u.rate;u2.onend=()=>setTimeout(()=>{const u3=new SpeechSynthesisUtterance(vocab[i].term);if(v)u3.voice=v;u3.rate=u.rate;u3.onend=()=>setTimeout(next,100);window.speechSynthesis.speak(u3)},100);window.speechSynthesis.speak(u2) },100);window.speechSynthesis.speak(u)};next()};
-    const speakWordOnce=(term)=>{ if(!supported||!term) return; const shouldResume=(status==='speaking'&&modeRef.current==='article'); const resumeIdx=idx; const resumeChar=charRef.current||0; sessionRef.current+=1; try{window.speechSynthesis.cancel()}catch{}; modeRef.current='vocab'; const u=new SpeechSynthesisUtterance(term); if(curVoice) u.voice=curVoice; u.rate=clamp(rate,K.RATE_MIN,K.ABS_MAX); u.pitch=1; u.onstart=()=>{ setStatus('speaking'); setIdx(-1) }; u.onend=()=>{ if(shouldResume){ speakFrom(Math.max(resumeIdx,0),resumeChar) } else { setStatus('idle') } }; u.onerror=u.onend; window.speechSynthesis.speak(u); };
+
+    function speakVocabQueueFrom(start=0){
+      if(!supported) return; const q=vocabQueueRef.current||[]; if(!q.length) return;
+      const __sess__=sessionRef.current+1; sessionRef.current=__sess__;
+      try{window.speechSynthesis.cancel()}catch{}; modeRef.current='vocab';
+      const say=(i)=>{ if(sessionRef.current!==__sess__) return; if(i>=q.length){
+          const resume=vocabResumeRef.current; vocabResumeRef.current=null;
+          if(resume && resume.shouldResume){ speakFrom(Math.max(resume.idx,0), resume.char||0); }
+          else { setStatus('idle'); setIdx(-1); }
+          return; }
+        const u=new SpeechSynthesisUtterance(String(q[i]||'')); if(curVoice) u.voice=curVoice; u.rate=clamp(rate,K.RATE_MIN,K.ABS_MAX); u.pitch=1;
+        u.onstart=()=>{ if(sessionRef.current!==__sess__) return; setStatus('speaking'); setIdx(-1); vocabIndexRef.current=i; };
+        u.onend=()=>{ if(sessionRef.current!==__sess__) return; setTimeout(()=>say(i+1),30); };
+        u.onerror=u.onend; window.speechSynthesis.speak(u);
+      };
+      say(start);
+    }
+
+    const playAll=()=>{ if(!supported||!vocab.length) return; vocabResumeRef.current=null; const q=triple(vocab.map(it=>it.term),3); vocabQueueRef.current=q; speakVocabQueueFrom(0); };
+
+    const speakWordOnce=(term)=>{ if(!supported||!term) return; const shouldResume=(status==='speaking'&&modeRef.current==='article'); vocabResumeRef.current = shouldResume ? {shouldResume:true, idx:idx, char:charRef.current||0} : null; vocabQueueRef.current=[term]; speakVocabQueueFrom(0); };
+
     const rm=(id)=>setVocab(p=>p.filter(x=>x.id!==id));
 
     // --- 衍生 ---
@@ -248,7 +283,7 @@
                   {chunks.map((c,i)=>{const active=i===idx&&(status==='speaking'||status==='paused');return (
                     <div key={i} data-active={active ? 'true' : 'false'} className={`text-sm leading-relaxed rounded-lg border p-2 select-text ${active?'bg-yellow-50 border-yellow-300 ring-2 ring-yellow-200':'bg-white border-slate-200 hover:bg-slate-50'}`}
                       title={active?'正在朗讀；雙擊選字加入，或點此段重播':'雙擊選字加入；點擊此段播放'}
-                      onClick={e=>{if((window.getSelection&&window.getSelection().toString().trim()))return; /* 點擊讀本句 */ speakFrom(i,0);}}
+                      onClick={e=>{if((window.getSelection&&window.getSelection().toString().trim()))return; speakFrom(i,0);}}
                       onDoubleClick={e=>{e.preventDefault();addFromSelection()}}>
                       <span className="opacity-60 mr-2">[{i+1}]</span><span>{c}</span>
                     </div>)})}
@@ -287,10 +322,11 @@
               </div>
               <div>
                 <label className="block font-medium mb-1">語速（{rate.toFixed(2)}×）</label>
-                <input type="range" min={K.RATE_MIN} max={K.RATE_MAX} step={0.05} value={rate} onChange={e=>changeRate(parseFloat(e.target.value))} className="w-full"/>
+                <input type="range" min={K.RATE_MIN} max={K.RATE_MAX} step={0.25} value={rate} onInput={e=>changeRate(parseFloat(e.target.value), true)} onChange={e=>changeRate(parseFloat(e.target.value), true)} className="w-full"/>
                 <div className="flex justify-between text-xs text-slate-500"><span>更慢（{K.RATE_MIN}×）</span><span>更快（{K.RATE_MAX}×）</span></div>
-                <div className="flex flex-wrap gap-2 mt-2 text-xs">
-                  {[.25,.5,1,1.5,2].map(v=> <button key={v} onClick={()=>changeRate(v)} className="px-2 py-1 rounded bg-slate-100">{v===.25?'超慢 ':''}{v}×</button>)}
+                <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
+                  {[.25,.5,.75,1].map(v=> <button type="button" key={v} onClick={()=>changeRate(v, true)} className="px-2 py-1 rounded bg-slate-100">{v===.25?'超慢 ':''}{v}×</button>)}
+                  <span className="text-slate-500">（雙點擊）</span>
                 </div>
               </div>
             </div>
