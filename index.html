@@ -31,7 +31,7 @@
   <script type="text/babel" data-presets="env,react" data-plugins="proposal-optional-chaining,proposal-nullish-coalescing-operator">
   // ======================================
   // ReadBuddy ＋ 測驗題（英→中 + 完形填空[單字輸入]）
-  // - 題庫：句子 5（英→中，選擇題）、單字完形 3（輸入填空）、句子完形 3（選擇題）
+  // - 題庫：隨機句子 4（英→中，選擇題）、句子完形 3（選擇填空）、單字完形 3（輸入填空）
   // - 回饋：作答後立即顯示正解；提供「播放句子」
   // - 介面：全螢幕覆蓋對話框
   // - 既有功能維持：逐句朗讀/置中、語速 0.25~1.0 即時變更、單字速覽點一下播放 1 次、右欄布局等
@@ -59,7 +59,11 @@
   };
   const selText=()=>{const ta=document.getElementById('tts-text');if(ta&&ta.selectionEnd>ta.selectionStart)return ta.value.slice(ta.selectionStart,ta.selectionEnd);const w=window.getSelection&&window.getSelection();return w?String(w.toString()):''};
   const sanitize=(s)=>String(s||'').replace(/[\n\r\t]+/g,' ').trim().replace(/^[^A-Za-z0-9\u4e00-\u9fff]+|[^A-Za-z0-9\u4e00-\u9fff\-’' ]+$/g,'').slice(0,64);
-  const parseZH=(def)=>{const m=String(def||'').match(/\bZH:\s*([^\n]+)/i);if(!m)return'';return m[1].replace(/[，,；;、]/g,'/').replace(/\s*\/?\s*或\s*/g,'/').replace(/\s{2,}/g,' ').trim()};
+    const parseZH=(def)=>{
+      const m=String(def||'').match(/ZH:\s*([^\n]+)/i);
+      if(!m) return '';
+      return m[1].replace(/[，,；;、]/g,'/').replace(/\s*\/?\s*或\s*/g,'/').replace(/\s{2,}/g,' ').trim();
+    };
   const normalizeWord=(s)=>String(s||'').toLowerCase().replace(/[^a-z]/g,'');
 
   // --- 自動測試（純函式；不中斷 UI） ---
@@ -193,13 +197,145 @@
     const del=(id)=>{setArticles(p=>p.filter(x=>x.id!==id));if(id===aid){setAid(null);setTitle('');setText('');setVocab([])}};
     const fresh=()=>{setAid(null);setTitle('');setText('');setVocab([])};
 
-    // --- 單字 ---
-    async function genDef(term){ if(aiOn&&aiKey){try{const r=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${aiKey}`},body:JSON.stringify({model:aiModel,temperature:.2,messages:[{role:'system',content:'You are a concise bilingual dictionary. Output exactly two lines: EN: <short gloss with POS> and ZH: <Traditional Chinese meaning>. Max 25 words each.'},{role:'user',content:`Define: ${term}`}]})});if(r.ok){const j=await r.json();const t=j?.choices?.[0]?.message?.content?.trim();if(t)return t}}catch(e){}}
-      let en='';try{const r=await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(term)}`);if(r.ok){const j=await r.json();const m=j?.[0]?.meanings?.[0];const d=m?.definitions?.[0]?.definition;en=(m?.partOfSpeech?`(${m.partOfSpeech}) `:'')+(d||'')}}catch{}
-      let zh='';if(en){try{const r=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(en)}&langpair=en|zh-TW`);if(r.ok){const j=await r.json();zh=j?.responseData?.translatedText||''}}catch{}}
-      return `${en?`EN: ${en}`:''}${en&&zh?'\n':''}${zh?`ZH: ${zh}`:''}`.trim()
+
+    // --- Google 翻譯 API ---
+    async function translateWithGoogle(text, fromLang = 'en', toLang = 'zh-TW') {
+      try {
+        // 使用 Google Translate 的免費網頁版 API
+        const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${fromLang}&tl=${toLang}&dt=t&q=${encodeURIComponent(text)}`;
+        
+        const response = await fetch(url);
+        if (!response.ok) return '';
+        
+        const data = await response.json();
+        const result = data?.[0]?.[0]?.[0];
+        
+        if (result && result.trim()) {
+          console.log('Google Translate successful:', result);
+          return result.trim();
+        }
+        return '';
+      } catch (e) {
+        console.warn('Google Translate failed:', e);
+        return '';
+      }
     }
-    async function addFromSelection(){const raw=sanitize(selText());if(!raw){setNote('請先在編輯框或預覽反白字詞');return}setNote('');setBusy(true);try{const def=await genDef(raw);setVocab(p=>{const has=p.some(x=>x.term.toLowerCase()===raw.toLowerCase());return has?p.map(x=>x.term.toLowerCase()===raw.toLowerCase()?{...x,definition:def||x.definition}:x):[{id:Date.now()+Math.random().toString(36).slice(2),term:raw,definition:def||''},...p]});save()}catch{setVocab(p=>[{id:Date.now()+Math.random().toString(36).slice(2),term:raw,definition:''},...p]);save()}finally{setBusy(false);setNote(`已加入：${raw}`)}}
+
+    // --- 翻譯狀態追蹤 ---
+    const [translationStats, setTranslationStats] = React.useState({
+      google: 0,
+      total: 0
+    });
+
+    // --- Google 翻譯函數 ---
+    async function translateToChinese(text) {
+      const result = await translateWithGoogle(text, 'en', 'zh-TW');
+      if (result && result.trim()) {
+        console.log('Google Translate successful:', result);
+        // 更新統計
+        setTranslationStats(prev => ({
+          ...prev,
+          google: prev.google + 1,
+          total: prev.total + 1
+        }));
+        return result.trim();
+      }
+      
+      console.warn('Google Translate failed for:', text);
+      return '';
+    }
+
+    // --- 單字 ---
+    async function genDef(term){ 
+      // 1. 嘗試 OpenAI API
+      if(aiOn&&aiKey){
+        try{
+          const r=await fetch('https://api.openai.com/v1/chat/completions',{
+            method:'POST',
+            headers:{'Content-Type':'application/json','Authorization':`Bearer ${aiKey}`},
+            body:JSON.stringify({
+              model:aiModel,
+              temperature:.2,
+              messages:[
+                {role:'system',content:'You are a concise bilingual dictionary. Output exactly two lines: EN: <short gloss with POS> and ZH: <Traditional Chinese meaning>. Max 25 words each.'},
+                {role:'user',content:`Define: ${term}`}
+              ]
+            })
+          });
+          if(r.ok){
+            const j=await r.json();
+            const t=j?.choices?.[0]?.message?.content?.trim();
+            if(t) {
+              console.log('OpenAI translation successful:', t);
+              return t;
+            }
+          }
+        }catch(e){
+          console.warn('OpenAI API failed:', e);
+        }
+      }
+      
+      // 2. 嘗試 Dictionary API + Google 翻譯
+      let en='';
+      try{
+        const r=await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(term)}`);
+        if(r.ok){
+          const j=await r.json();
+          const m=j?.[0]?.meanings?.[0];
+          const d=m?.definitions?.[0]?.definition;
+          en=(m?.partOfSpeech?`(${m.partOfSpeech}) `:'')+(d||'');
+        }
+      }catch(e){
+        console.warn('Dictionary API failed:', e);
+      }
+      
+      // 3. 使用 Google 翻譯
+      let zh = '';
+      if(en){
+        zh = await translateToChinese(en);
+      }
+      
+      // 4. 如果沒有英文定義，直接翻譯單字本身
+      if(!en && !zh){
+        zh = await translateToChinese(term);
+      }
+      
+      // 5. 確保至少有一個定義
+      if(!en && !zh) {
+        return `EN: ${term}`;
+      }
+      
+      const result = `${en?`EN: ${en}`:''}${en&&zh?'\n':''}${zh?`ZH: ${zh}`:''}`.trim();
+      console.log('Final definition generated:', result);
+      return result;
+    }
+    async function addFromSelection(){
+      const raw=sanitize(selText());
+      if(!raw){
+        setNote('請先在編輯框或預覽反白字詞');
+        return;
+      }
+      setNote('');
+      setBusy(true);
+      try{
+        const def=await genDef(raw);
+        console.log('Generated definition for', raw, ':', def); // 調試信息
+        setVocab(p=>{
+          const has=p.some(x=>x.term.toLowerCase()===raw.toLowerCase());
+          return has?
+            p.map(x=>x.term.toLowerCase()===raw.toLowerCase()?{...x,definition:def||x.definition}:x):
+            [{id:Date.now()+Math.random().toString(36).slice(2),term:raw,definition:def||''},...p];
+        });
+        save();
+      }catch(e){
+        console.error('Error generating definition:', e);
+        setVocab(p=>[{id:Date.now()+Math.random().toString(36).slice(2),term:raw,definition:''},...p]);
+        save();
+      }finally{
+        setBusy(false);
+        setNote(`已加入：${raw}`);
+      }
+    }
 
     function speakVocabQueueFrom(start=0){
       if(!supported) return; const q=vocabQueueRef.current||[]; if(!q.length) return;
@@ -221,6 +357,25 @@
     const playAll=()=>{ if(!supported||!vocab.length) return; vocabResumeRef.current=null; const q=triple(vocab.map(it=>it.term),3); vocabQueueRef.current=q; speakVocabQueueFrom(0); };
     const speakWordOnce=(term)=>{ if(!supported||!term) return; const shouldResume=(status==='speaking'&&modeRef.current==='article'); vocabResumeRef.current = shouldResume ? {shouldResume:true, idx:idx, char:charRef.current||0} : null; vocabQueueRef.current=[term]; speakVocabQueueFrom(0); };
     const rm=(id)=>setVocab(p=>p.filter(x=>x.id!==id));
+    
+    // 手動重新翻譯單字
+    const retranslateWord=async(id)=>{
+      const word=vocab.find(v=>v.id===id);
+      if(!word) return;
+      setBusy(true);
+      try{
+        const def=await genDef(word.term);
+        setVocab(p=>p.map(v=>v.id===id?{...v,definition:def||v.definition}:v));
+        save();
+        setNote(`已重新翻譯：${word.term}`);
+      }catch(e){
+        console.error('Error retranslating:', e);
+        setNote(`翻譯失敗：${word.term}`);
+      }finally{
+        setBusy(false);
+      }
+    };
+
 
     // --- 測驗：題庫與出題 ---
     const fetchZH=async(en)=>{ try{ const r=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(en)}&langpair=en|zh-TW`); if(!r.ok) return ''; const j=await r.json(); return (j?.responseData?.translatedText||'').trim(); }catch{return ''} };
@@ -236,9 +391,53 @@
       const qs=[];
       for(const s of pick){
         let zh = await fetchZH(s);
+        if(!zh) continue; // 跳過翻譯失敗的句子
         const choices = buildChoices(zh, poolZH);
-        qs.push({type:'sent-zh', prompt: s, options: choices, correctIndex: Math.max(0, choices.indexOf(zh)), playText: s});
+        const correctIndex = choices.indexOf(zh);
+        if(correctIndex === -1) continue; // 跳過正確答案不在選項中的情況
+        qs.push({type:'sent-zh', prompt: s, options: choices, correctIndex: correctIndex, playText: s});
       }
+      return qs;
+    }
+
+    // 新增題型：從文章隨機選出一個句子，4選1中文翻譯
+    async function makeRandomSentenceQuestions(n=4){
+      const enChunks=chunks.filter(s=>/[A-Za-z]/.test(s)); 
+      if(enChunks.length===0) return [];
+      
+      const pick=shuffle(enChunks).slice(0, Math.min(n, enChunks.length));
+      const qs=[];
+      
+      // 先批次翻譯所有選中的句子
+      const translations = [];
+      for(const s of pick){
+        const zh = await translateToChinese(s); // 使用強化翻譯函數
+        if(zh) translations.push(zh);
+      }
+      
+      // 為每個句子創建題目
+      for(let i = 0; i < pick.length; i++){
+        const sentence = pick[i];
+        const correctTranslation = translations[i];
+        
+        if(!correctTranslation) continue; // 跳過翻譯失敗的句子
+        
+        // 創建干擾選項：從其他句子的翻譯中選擇
+        const otherTranslations = translations.filter((t, idx) => idx !== i && t !== correctTranslation);
+        const choices = buildChoices(correctTranslation, otherTranslations, 4);
+        const correctIndex = choices.indexOf(correctTranslation);
+        
+        if(correctIndex === -1) continue; // 跳過正確答案不在選項中的情況
+        
+        qs.push({
+          type: 'random-sent-zh',
+          prompt: sentence,
+          options: choices,
+          correctIndex: correctIndex,
+          playText: sentence
+        });
+      }
+      
       return qs;
     }
 
@@ -262,9 +461,12 @@
     async function startQuiz(){
       setQuizOpen(true); setQuizBusy(true); setQuizSel(null); setQuizScore(0); setQuizIdx(0); setTyped(''); setTypedOk(null);
       try{
-        const [qs, qsc] = await Promise.all([makeSentenceQuestions(5), Promise.resolve(makeSentenceClozeQuestions(3))]);
-        const qvi = makeVocabClozeInputQuestions(3);
-        const qAll=[...qs, ...qvi, ...qsc];
+        const [qrs, qsc, qvi] = await Promise.all([
+          makeRandomSentenceQuestions(4),
+          Promise.resolve(makeSentenceClozeQuestions(3)),
+          Promise.resolve(makeVocabClozeInputQuestions(3))
+        ]);
+        const qAll=[...qrs, ...qsc, ...qvi];
         setQuizQs(qAll); setQuizIdx(0);
         if(qAll[0]) speakOnce(qAll[0].playText || qAll[0].prompt);
       }finally{ setQuizBusy(false); }
@@ -285,10 +487,33 @@
     // 朗讀時置中當前句（smooth）
     React.useEffect(()=>{ if (idx < 0) return; const c = previewRef.current; if (!c) return; const el = c.querySelector('[data-active="true"]'); if (!el) return; const containerRect = c.getBoundingClientRect(); const elRect = el.getBoundingClientRect(); const current = c.scrollTop + (elRect.top - containerRect.top); const target = current - (c.clientHeight / 2 - el.clientHeight / 2); c.scrollTo({ top: Math.max(target, 0), behavior: 'smooth' }); }, [idx, status, chunks.length]);
 
+    // ESC 鍵退出徽章對話框
+    React.useEffect(()=>{
+      const handleKeyDown = (e) => {
+        if (e.key === 'Escape' && !quizOpen && quizQs.length > 0) {
+          const percent = Math.round((quizScore/quizQs.length)*100) || 0;
+          const tier = badgeTier(percent);
+          if (tier !== 'none') {
+            setQuizQs([]);
+          }
+        }
+      };
+      document.addEventListener('keydown', handleKeyDown);
+      return () => document.removeEventListener('keydown', handleKeyDown);
+    }, [quizOpen, quizQs.length, quizScore]);
+
     // --- UI ---
     return (
       <div className="max-w-6xl mx-auto p-5 text-slate-800">
-        <h1 className="text-2xl md:text-3xl font-semibold mb-4">ReadBuddy｜朗讀夥伴</h1>
+        <div className="flex items-center gap-3 mb-4">
+          <div className="relative w-12 h-12 rounded-full ring-3 ring-yellow-400" style={{boxShadow: '0 0 0 3px #fbbf24'}}>
+            <div className="w-12 h-12 rounded-full overflow-hidden ring-2 ring-yellow-500" style={{boxShadow: '0 0 0 3px #f59e0b'}}>
+              <div className="w-full h-full grid place-items-center text-2xl">🐧</div>
+            </div>
+            <div className="absolute -top-2 -left-2 text-xl">👑</div>
+          </div>
+          <h1 className="text-2xl md:text-3xl font-semibold">ReadBuddy｜朗讀夥伴</h1>
+        </div>
         {!supported&&<div className="p-3 mb-4 rounded-lg bg-red-50 text-red-700 border border-red-200">此瀏覽器不支援 SpeechSynthesis，建議用桌面版 Chrome/Edge。</div>}
 
         <div className="grid gap-4 md:grid-cols-3">
@@ -374,9 +599,18 @@
             <div className="pt-2 border-t border-slate-200">
               <div className="mb-2">
                 <h3 className="font-medium">單字速覽</h3>
-                <div className="flex gap-2 text-sm mt-2">
+                <div className="flex gap-2 text-sm mt-2 flex-wrap">
                   <button onClick={addFromSelection} disabled={busy} className="px-3 py-1.5 rounded-full bg-emerald-600 text-white disabled:opacity-50">{busy?'⏳ 解析中…':'🤖 從選取新增'}</button>
                   <button onClick={playAll} className="px-3 py-1.5 rounded-full bg-indigo-600 text-white">▶️ 單字播放 x 3</button>
+                </div>
+                <div className="text-xs text-slate-500 mt-1">
+                  提示：雙擊文章中的字詞可加入單字庫，系統會自動翻譯<br/>
+                  使用 Google 翻譯，提供高品質中文翻譯
+                  {translationStats.total > 0 && (
+                    <div className="mt-1 text-xs">
+                      翻譯統計：Google {translationStats.google} | 總計 {translationStats.total}
+                    </div>
+                  )}
                 </div>
               </div>
               {glance.length===0? <div className="text-sm text-slate-500">尚未加入單字。雙擊文章中的字詞可加入。</div> :
@@ -384,10 +618,21 @@
                   {glance.map(g=> (
                     <div key={g.id} className="flex items-center gap-2 p-2">
                       <div className="flex-1 min-w-0">
-                        <button type="button" onClick={()=>speakWordOnce(g.term)} className="font-semibold truncate text-left cursor-pointer hover:underline text-blue-800 hover:text-blue-900" title="點擊播放 1 次">{g.term}</button>
-                        {g.zh&&<div className="text-xs text-slate-500 truncate">{g.zh}</div>}
+                        <div className="flex items-center gap-1">
+                          <button type="button" onClick={()=>speakWordOnce(g.term)} className="font-semibold truncate text-left cursor-pointer hover:underline text-blue-800 hover:text-blue-900" title="點擊播放 1 次">{g.term}</button>
+                          {g.zh ? (
+                            <span className="text-xs text-emerald-600" title="有中文翻譯">✓</span>
+                          ) : (
+                            <span className="text-xs text-yellow-600" title="無中文翻譯">⚠</span>
+                          )}
+                          <span className="text-xs text-slate-400" title="使用 Google 翻譯">🌐</span>
+                        </div>
+                        {g.zh?<div className="text-xs text-slate-500 truncate">{g.zh}</div>:<div className="text-xs text-slate-400 italic">無中文翻譯 - 點擊🔄重新翻譯</div>}
                       </div>
-                      <button onClick={()=>rm(g.id)} className="px-2 py-1 text-xs rounded bg-red-50 text-red-700 border border-red-200">刪</button>
+                      <div className="flex gap-1">
+                        {!g.zh&&<button onClick={()=>retranslateWord(g.id)} disabled={busy} className="px-2 py-1 text-xs rounded bg-yellow-50 text-yellow-700 border border-yellow-200 disabled:opacity-50" title="重新翻譯">🔄</button>}
+                        <button onClick={()=>rm(g.id)} className="px-2 py-1 text-xs rounded bg-red-50 text-red-700 border border-red-200">刪</button>
+                      </div>
                     </div>))}
                 </div>
               }
@@ -396,7 +641,10 @@
             {/* 測驗設定卡 */}
             <div className="pt-2 border-t border-slate-200">
               <h3 className="font-medium mb-2">測驗</h3>
-              <div className="text-sm text-slate-600 mb-2">題型：句子 5（英→中，選擇）＋ 單字完形 3（輸入）＋ 句子完形 3（選擇）。回饋：立即顯示正解；支援「播放句子」。</div>
+              <div className="text-sm text-slate-600 mb-2">
+                題型：隨機句子 4（英→中，選擇）＋ 句子完形 3（選擇填空）＋ 單字完形 3（輸入填空）<br/>
+                回饋：立即顯示正解；支援「播放句子」。
+              </div>
               <button onClick={startQuiz} className="px-3 py-2 rounded-xl bg-amber-600 text-white hover:bg-amber-700">📝 開始測驗</button>
             </div>
 
@@ -439,7 +687,9 @@
               ) : (
                 <div>
                   <div className="mb-3 p-3 rounded-xl border bg-slate-50">
-                    <div className="text-xs text-slate-500 mb-1">題幹</div>
+                    <div className="text-xs text-slate-500 mb-1">
+                      {quizQs[quizIdx]?.type === 'random-sent-zh' ? '隨機句子翻譯' : '題幹'}
+                    </div>
                     <div className="text-lg leading-relaxed whitespace-pre-wrap">{quizQs[quizIdx]?.prompt}</div>
                     <button onClick={()=>speakOnce(quizQs[quizIdx]?.playText || quizQs[quizIdx]?.prompt)} className="mt-2 text-xs px-2 py-1 rounded bg-slate-100">🔊 播放句子</button>
                   </div>
@@ -478,18 +728,25 @@
         {/* 完成徽章彈窗 */}
         {!quizOpen && quizQs.length>0 && (
           (()=>{ const percent=Math.round((quizScore/quizQs.length)*100)||0; const tier=badgeTier(percent); if(tier==='none') return null; const color= tier==='blue'? '#3b82f6' : '#eab308'; const crown=tier==='gold-crown'; return (
-            <div className="fixed bottom-4 right-4 z-40">
-              <div className="rounded-2xl border border-slate-200 bg-white shadow-xl p-3 w-[min(320px,85vw)]">
-                <div className="flex items-center gap-3">
-                  <div className="relative w-14 h-14 rounded-full ring-4" style={{ringColor: color}}>
-                    <div className="w-14 h-14 rounded-full overflow-hidden ring-2" style={{boxShadow:`0 0 0 4px ${color}`}}>
-                      <div className="w-full h-full grid place-items-center text-3xl">🐧</div> className="w-full h-full object-cover"/> : <div className="w-full h-full grid place-items-center text-3xl">🐧</div>}
+            <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+              <div className="w-[min(960px,92vw)] max-h-[92vh] overflow-auto rounded-2xl bg-white shadow-xl border border-slate-200 p-4">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="text-lg font-semibold text-slate-800">測驗完成！</div>
+                  <button onClick={()=>setQuizQs([])} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600">✖</button>
+                </div>
+                <div className="flex items-center gap-6">
+                  <div className="relative w-20 h-20 rounded-full ring-4" style={{ringColor: color}}>
+                    <div className="w-20 h-20 rounded-full overflow-hidden ring-2" style={{boxShadow:`0 0 0 4px ${color}`}}>
+                      <div className="w-full h-full grid place-items-center text-4xl">🐧</div>
                     </div>
-                    {crown && <div className="absolute -top-2 -left-2 text-2xl">👑</div>}
+                    {crown && <div className="absolute -top-3 -left-3 text-3xl">👑</div>}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="font-semibold">恭喜獲得{ tier==='blue'?'藍色':(tier==='gold'?'金色':'金色(皇冠)') }小企鵝徽章！</div>
-                    <div className="text-sm text-slate-600">本次得分 {quizScore} / {quizQs.length}（{percent}%）</div>
+                    <div className="text-xl font-bold text-slate-800 mb-2">恭喜獲得{ tier==='blue'?'藍色':(tier==='gold'?'金色':'金色(皇冠)') }小企鵝徽章！</div>
+                    <div className="text-lg text-slate-600 mb-4">本次得分 {quizScore} / {quizQs.length}（{percent}%）</div>
+                    <div className="text-sm text-slate-500">
+                      按 ESC 鍵或點擊 ✖ 關閉此視窗
+                    </div>
                   </div>
                 </div>
               </div>
