@@ -38,7 +38,7 @@
   // ======================================
 
   // --- 常數與小工具 ---
-  const K={RATE_MIN:.25,RATE_MAX:1,ABS_MAX:1,ART:'rb_articles_v2',BADGE_IMG:'rb_badge_img'};
+  const K={RATE_MIN:.25,RATE_MAX:1,ABS_MAX:1,ART:'rb_articles_v2'};
   const S={g:(k,f="")=>{try{return localStorage.getItem(k)??f}catch{return f}},s:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}};
   const clamp=(x,a,b)=>Math.min(Math.max(x,a),b);
   const uniq=(arr)=>Array.from(new Set(arr.filter(Boolean)));
@@ -117,9 +117,7 @@
     const [busy,setBusy]=React.useState(false); const [note,setNote]=React.useState('');
     const supported=typeof window!=='undefined'&&'speechSynthesis'in window&&typeof SpeechSynthesisUtterance!=='undefined';
 
-    // 徽章圖片（使用者自上傳；預設無，會退回 emoji）
-    const [badgeImg,setBadgeImg]=React.useState(()=>S.g(K.BADGE_IMG,''));
-
+    
     // 測驗狀態
     const [quizOpen,setQuizOpen]=React.useState(false);
     const [quizBusy,setQuizBusy]=React.useState(false);
@@ -137,8 +135,6 @@
     React.useEffect(()=>{try{S.s('tts_vocab',JSON.stringify(vocab))}catch{}},[vocab]);
     React.useEffect(()=>{try{S.s(K.ART,JSON.stringify(articles))}catch{}},[articles]);
     React.useEffect(()=>{S.s('ai_on',aiOn?'1':'0');S.s('ai_key',aiKey);S.s('ai_model',aiModel)},[aiOn,aiKey,aiModel]);
-    React.useEffect(()=>{if(badgeImg) S.s(K.BADGE_IMG,badgeImg)},[badgeImg]);
-
     // --- 載入語音 ---
     const loadVoices=React.useCallback(()=>{if(!supported)return;const list=window.speechSynthesis.getVoices();setVoices(list);if(!voiceId&&list[0]){const prefer=list.find(v=>/zh-TW/i.test(v.lang))||list.find(v=>/zh-CN/i.test(v.lang))||list.find(v=>/en-US/i.test(v.lang))||list[0];setVoiceId(prefer.voiceURI||prefer.name)}},[supported,voiceId]);
     React.useEffect(()=>{if(!supported)return;loadVoices();window.speechSynthesis.onvoiceschanged=loadVoices;return()=>{window.speechSynthesis.onvoiceschanged=null}},[supported,loadVoices]);
@@ -344,7 +340,7 @@
               <div className="max-h-32 overflow-auto rounded-xl border border-slate-200 divide-y bg-white">
                 {articles.length===0? <div className="p-3 text-sm text-slate-500">尚未儲存文章。</div> : articles.map(a=> (
                   <div key={a.id} className={`p-2 flex items-center gap-2 ${a.id===aid?'bg-indigo-50':''}`}>
-                    <button className="flex-1 text左 truncate" onClick={()=>load(a.id)} title={new Date(a.updatedAt).toLocaleString()}>
+                    <button className="flex-1 text-left truncate" onClick={()=>load(a.id)} title={new Date(a.updatedAt).toLocaleString()}>
                       <div className="truncate font-medium">{a.title}</div>
                       <div className="text-xs text-slate-500">更新：{new Date(a.updatedAt).toLocaleString()}</div>
                     </button>
@@ -402,14 +398,6 @@
               <h3 className="font-medium mb-2">測驗</h3>
               <div className="text-sm text-slate-600 mb-2">題型：句子 5（英→中，選擇）＋ 單字完形 3（輸入）＋ 句子完形 3（選擇）。回饋：立即顯示正解；支援「播放句子」。</div>
               <button onClick={startQuiz} className="px-3 py-2 rounded-xl bg-amber-600 text-white hover:bg-amber-700">📝 開始測驗</button>
-            </div>
-
-            {/* 徽章圖片上傳（可選） */}
-            <div className="pt-2 border-t border-slate-200">
-              <h3 className="font-medium mb-1">徽章圖片</h3>
-              <div className="text-xs text-slate-500 mb-2">上傳你提供的小企鵝圖（PNG/JPG），之後達標就用這張圖顯示徽章。</div>
-              <input type="file" accept="image/*" onChange={async(e)=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=()=>setBadgeImg(String(r.result));r.readAsDataURL(f);}} className="text-sm" />
-              {badgeImg? <div className="mt-2 flex items-center gap-2"><div className="w-10 h-10 rounded-full overflow-hidden ring-2 ring-slate-300"><img src={badgeImg} className="w-full h-full object-cover"/></div><span className="text-xs text-slate-600">預覽</span></div> : null}
             </div>
 
             {/* AI 設定（可選） */}
@@ -495,7 +483,7 @@
                 <div className="flex items-center gap-3">
                   <div className="relative w-14 h-14 rounded-full ring-4" style={{ringColor: color}}>
                     <div className="w-14 h-14 rounded-full overflow-hidden ring-2" style={{boxShadow:`0 0 0 4px ${color}`}}>
-                      {badgeImg? <img src={badgeImg} className="w-full h-full object-cover"/> : <div className="w-full h-full grid place-items-center text-3xl">🐧</div>}
+                      <div className="w-full h-full grid place-items-center text-3xl">🐧</div> className="w-full h-full object-cover"/> : <div className="w-full h-full grid place-items-center text-3xl">🐧</div>}
                     </div>
                     {crown && <div className="absolute -top-2 -left-2 text-2xl">👑</div>}
                   </div>
