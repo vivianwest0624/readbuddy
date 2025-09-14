@@ -131,6 +131,7 @@
     const [quizScore,setQuizScore]=React.useState(0);
     const [typed,setTyped]=React.useState('');
     const [typedOk,setTypedOk]=React.useState(null); // null|true|false
+    const [hasRetried,setHasRetried]=React.useState(false); // 是否已經重試過
 
     // --- 永續化 ---
     React.useEffect(()=>S.s('tts_text',text),[text]);
@@ -459,7 +460,7 @@
     }
 
     async function startQuiz(){
-      setQuizOpen(true); setQuizBusy(true); setQuizSel(null); setQuizScore(0); setQuizIdx(0); setTyped(''); setTypedOk(null);
+      setQuizOpen(true); setQuizBusy(true); setQuizSel(null); setQuizScore(0); setQuizIdx(0); setTyped(''); setTypedOk(null); setHasRetried(false);
       try{
         const [qrs, qsc, qvi] = await Promise.all([
           makeRandomSentenceQuestions(4),
@@ -474,11 +475,23 @@
 
     function pickColor(i){ if(quizSel==null) return 'bg-white hover:bg-slate-50'; if(i===quizQs[quizIdx]?.correctIndex) return 'bg-emerald-50 border-emerald-300'; if(i===quizSel) return 'bg-red-50 border-red-300'; return 'bg-white opacity-70'; }
     function onSelect(i){ if(quizSel!=null || typedOk!=null) return; const q=quizQs[quizIdx]; if(!q) return; setQuizSel(i); const ok=i===q.correctIndex; if(ok) setQuizScore(s=>s+1); speakOnce(q.playText || q.prompt); }
-    function onSubmitTyped(){ if(typedOk!=null) return; const q=quizQs[quizIdx]; const ok=normalizeWord(typed)===normalizeWord(q.answer||''); setTypedOk(ok); if(ok) setQuizScore(s=>s+1); speakOnce(q.playText || q.prompt); }
-    function nextQ(){ const last=quizIdx>=quizQs.length-1; if(last){ setQuizOpen(false); return; } setQuizIdx(i=>i+1); setQuizSel(null); setTyped(''); setTypedOk(null); const q=quizQs[quizIdx+1]; if(q) speakOnce(q.playText || q.prompt); }
+    function onSubmitTyped(){ 
+      if(typedOk!=null) return; 
+      const q=quizQs[quizIdx]; 
+      const ok=normalizeWord(typed)===normalizeWord(q.answer||''); 
+      setTypedOk(ok); 
+      if(ok) {
+        setQuizScore(s=>s+1);
+        setHasRetried(false); // 答對時重置重試狀態
+      } else {
+        setHasRetried(true); // 答錯時標記已重試
+      }
+      speakOnce(q.playText || q.prompt); 
+    }
+    function nextQ(){ const last=quizIdx>=quizQs.length-1; if(last){ setQuizOpen(false); return; } setQuizIdx(i=>i+1); setQuizSel(null); setTyped(''); setTypedOk(null); setHasRetried(false); const q=quizQs[quizIdx+1]; if(q) speakOnce(q.playText || q.prompt); }
 
     // --- 徽章 ---
-    function badgeTier(p){ if(p===100) return 'gold-crown'; if(p>=90) return 'gold'; if(p>=80) return 'blue'; return 'none'; }
+    function badgeTier(p){ if(p===100) return 'gold-crown'; if(p>=90) return 'gold'; if(p>=80) return 'blue'; if(p>=70) return 'gray'; return 'encourage'; }
 
     // --- 衍生 ---
     const dur=(()=>{const w=(text.match(/\S+/g)||[]).length||0;const m=w/(160*Math.max(rate,K.RATE_MIN));const s=Math.ceil(m*60);return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`})();
@@ -501,6 +514,29 @@
       document.addEventListener('keydown', handleKeyDown);
       return () => document.removeEventListener('keydown', handleKeyDown);
     }, [quizOpen, quizQs.length, quizScore]);
+
+    // Enter 鍵跳下一題（測驗對話框開啟時）
+    React.useEffect(()=>{
+      const handleKeyDown = (e) => {
+        if (e.key === 'Enter' && quizOpen && !quizBusy && quizQs.length > 0) {
+          const q = quizQs[quizIdx];
+          if (!q) return;
+          
+          // 如果是單字填充題且已經答過題
+          if (q.type === 'vocab-input') {
+            if (typedOk !== null) {
+              nextQ();
+            }
+          } 
+          // 如果是選擇題且已經選擇答案
+          else if (quizSel !== null) {
+            nextQ();
+          }
+        }
+      };
+      document.addEventListener('keydown', handleKeyDown);
+      return () => document.removeEventListener('keydown', handleKeyDown);
+    }, [quizOpen, quizBusy, quizQs, quizIdx, quizSel, typedOk]);
 
     // --- UI ---
     return (
@@ -678,7 +714,10 @@
             <div className="w-[min(960px,92vw)] max-h-[92vh] overflow-auto rounded-2xl bg-white shadow-xl border border-slate-200 p-4">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-sm text-slate-600">測驗 · 第 {quizIdx+1} / {Math.max(quizQs.length,1)} 題</div>
-                <button onClick={()=>setQuizOpen(false)} className="px-2 py-1 rounded bg-slate-100">✖</button>
+                <div className="flex items-center gap-2">
+                  <div className="text-xs text-slate-500">按 Enter 跳下一題</div>
+                  <button onClick={()=>setQuizOpen(false)} className="px-2 py-1 rounded bg-slate-100">✖</button>
+                </div>
               </div>
               {quizBusy? (
                 <div className="p-8 text-center text-slate-500">準備題目中…</div>
@@ -699,10 +738,21 @@
                     <div className="space-y-2">
                       <input value={typed} onChange={e=>setTyped(e.target.value)} onKeyDown={e=>{if(e.key==='Enter') onSubmitTyped();}} placeholder="輸入正確英文單字…" className={`w-full rounded-xl border p-3 ${typedOk==null?'border-slate-300':typedOk?'border-emerald-300 bg-emerald-50':'border-red-300 bg-red-50'}`} />
                       {typedOk!=null && (
-                        <div className={`text-sm ${typedOk?'text-emerald-700':'text-red-700'}`}>{typedOk? '答對！':'答錯；正解：'}<span className="font-medium">{quizQs[quizIdx]?.answer}</span></div>
+                        <div className={`text-sm ${typedOk?'text-emerald-700':'text-red-700'}`}>
+                          {typedOk? '答對！':'答錯；正解：'}<span className="font-medium">{quizQs[quizIdx]?.answer}</span>
+                        </div>
                       )}
-                      <div className="flex justify-end">
-                        <button onClick={typedOk==null? onSubmitTyped: nextQ} className="px-3 py-1.5 rounded bg-indigo-600 text-white">{typedOk==null? '送出' : (quizIdx>=quizQs.length-1? '完成' : '下一題')}</button>
+                      {typedOk===false && !hasRetried && (
+                        <div className="text-sm text-slate-600 bg-slate-50 p-2 rounded border">
+                          再試一次吧！重新輸入正確答案：
+                        </div>
+                      )}
+                      <div className="flex justify-end gap-2">
+                        {typedOk===false && !hasRetried ? (
+                          <button onClick={()=>{setTyped(''); setTypedOk(null);}} className="px-3 py-1.5 rounded bg-yellow-600 text-white">🔄 再試一次</button>
+                        ) : (
+                          <button onClick={typedOk==null? onSubmitTyped: nextQ} className="px-3 py-1.5 rounded bg-indigo-600 text-white">{typedOk==null? '送出' : (quizIdx>=quizQs.length-1? '完成' : '下一題')}</button>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -727,31 +777,71 @@
 
         {/* 完成徽章彈窗 */}
         {!quizOpen && quizQs.length>0 && (
-          (()=>{ const percent=Math.round((quizScore/quizQs.length)*100)||0; const tier=badgeTier(percent); if(tier==='none') return null; const color= tier==='blue'? '#3b82f6' : '#eab308'; const crown=tier==='gold-crown'; return (
-            <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-              <div className="w-[min(960px,92vw)] max-h-[92vh] overflow-auto rounded-2xl bg-white shadow-xl border border-slate-200 p-4">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="text-lg font-semibold text-slate-800">測驗完成！</div>
-                  <button onClick={()=>setQuizQs([])} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600">✖</button>
-                </div>
-                <div className="flex items-center gap-6">
-                  <div className="relative w-20 h-20 rounded-full ring-4" style={{ringColor: color}}>
-                    <div className="w-20 h-20 rounded-full overflow-hidden ring-2" style={{boxShadow:`0 0 0 4px ${color}`}}>
-                      <div className="w-full h-full grid place-items-center text-4xl">🐧</div>
-                    </div>
-                    {crown && <div className="absolute -top-3 -left-3 text-3xl">👑</div>}
+          (()=>{ 
+            const percent=Math.round((quizScore/quizQs.length)*100)||0; 
+            const tier=badgeTier(percent); 
+            if(tier==='none') return null; 
+            
+            let color, crown, title, message, encouragement;
+            if(tier==='encourage') {
+              color = '#6b7280'; // 灰色
+              crown = false;
+              title = '加油!再接再厲!把單字讀熟再挑戰一次';
+              message = `本次得分 ${quizScore} / ${quizQs.length}（${percent}%）`;
+              encouragement = '溫和鼓勵，提供學習建議';
+            } else if(tier==='gray') {
+              color = '#6b7280'; // 灰色
+              crown = false;
+              title = '很棒喔! 有進步了!';
+              message = `本次得分 ${quizScore} / ${quizQs.length}（${percent}%）`;
+              encouragement = '認可進步，給予基本認可';
+            } else if(tier==='blue') {
+              color = '#3b82f6';
+              crown = false;
+              title = '恭喜你，努力是會有結果的!';
+              message = `本次得分 ${quizScore} / ${quizQs.length}（${percent}%）`;
+              encouragement = '正式恭喜，藍色徽章獎勵';
+            } else if(tier==='gold') {
+              color = '#eab308';
+              crown = false;
+              title = '太棒了! 你已經很厲害囉!';
+              message = `本次得分 ${quizScore} / ${quizQs.length}（${percent}%）`;
+              encouragement = '優秀表現，金色徽章獎勵';
+            } else if(tier==='gold-crown') {
+              color = '#eab308';
+              crown = true;
+              title = '你是英文高手!100分!';
+              message = `本次得分 ${quizScore} / ${quizQs.length}（${percent}%）`;
+              encouragement = '完美表現，金色皇冠徽章';
+            }
+            
+            return (
+              <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+                <div className="w-[min(960px,92vw)] max-h-[92vh] overflow-auto rounded-2xl bg-white shadow-xl border border-slate-200 p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="text-lg font-semibold text-slate-800">測驗完成！</div>
+                    <button onClick={()=>setQuizQs([])} className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600">✖</button>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xl font-bold text-slate-800 mb-2">恭喜獲得{ tier==='blue'?'藍色':(tier==='gold'?'金色':'金色(皇冠)') }小企鵝徽章！</div>
-                    <div className="text-lg text-slate-600 mb-4">本次得分 {quizScore} / {quizQs.length}（{percent}%）</div>
-                    <div className="text-sm text-slate-500">
-                      按 ESC 鍵或點擊 ✖ 關閉此視窗
+                  <div className="flex items-center gap-6">
+                    <div className="relative w-24 h-24 rounded-full ring-4" style={{ringColor: color}}>
+                      <div className="w-24 h-24 rounded-full overflow-hidden ring-2" style={{boxShadow:`0 0 0 4px ${color}`}}>
+                        <div className="w-full h-full grid place-items-center text-5xl">🐧</div>
+                      </div>
+                      {crown && <div className="absolute -top-3 -left-3 text-4xl">👑</div>}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xl font-bold text-slate-800 mb-2">{title}</div>
+                      <div className="text-sm text-slate-500 mb-2 italic">{encouragement}</div>
+                      <div className="text-lg text-slate-600 mb-4">{message}</div>
+                      <div className="text-sm text-slate-500">
+                        按 ESC 鍵或點擊 ✖ 關閉此視窗
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-            </div>
-          )})()
+            );
+          })()
         )}
 
         <footer className="py-6 text-center text-xs text-slate-400">
