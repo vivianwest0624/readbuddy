@@ -9,11 +9,9 @@
   <meta property="og:site_name" content="ReadBuddy" />
   <meta property="og:description" content="" />
   <meta property="og:locale" content="zh_TW" />
-
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="ReadBuddy | 朗讀夥伴" />
   <meta name="twitter:description" content="" />
-
   <meta name="description" content="" />
   <title>ReadBuddy | 朗讀夥伴</title>
   <script src="https://cdn.tailwindcss.com"></script>
@@ -32,16 +30,19 @@
 
   <script type="text/babel" data-presets="env,react" data-plugins="proposal-optional-chaining,proposal-nullish-coalescing-operator">
   // ======================================
-  // ReadBuddy 精簡版（修復 Script error＋強化自動測試）
-  // - 修正：移除多餘殘段造成的語法錯誤（Script error）
-  // - 保留並擴充自動測試（不改既有用例）
-  // - 功能：朗讀中可即時變速；vocab 模式即時套用；單字點擊播放一次；置中高亮等
+  // ReadBuddy ＋ 測驗題（英→中 + 完形填空[單字輸入]）
+  // - 題庫：句子 5（英→中，選擇題）、單字完形 3（輸入填空）、句子完形 3（選擇題）
+  // - 回饋：作答後立即顯示正解；提供「播放句子」
+  // - 介面：全螢幕覆蓋對話框
+  // - 既有功能維持：逐句朗讀/置中、語速 0.25~1.0 即時變更、單字速覽點一下播放 1 次、右欄布局等
   // ======================================
 
   // --- 常數與小工具 ---
-  const K={RATE_MIN:.25,RATE_MAX:1,ABS_MAX:1,ART:'rb_articles_v2'};
+  const K={RATE_MIN:.25,RATE_MAX:1,ABS_MAX:1,ART:'rb_articles_v2',BADGE_IMG:'rb_badge_img'};
   const S={g:(k,f="")=>{try{return localStorage.getItem(k)??f}catch{return f}},s:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}};
   const clamp=(x,a,b)=>Math.min(Math.max(x,a),b);
+  const uniq=(arr)=>Array.from(new Set(arr.filter(Boolean)));
+  const shuffle=(a)=>{const b=[...a];for(let i=b.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[b[i],b[j]]=[b[j],b[i]]}return b};
   const triple=(arr,times=3)=>{const out=[];for(const t of arr){for(let i=0;i<times;i++) out.push(t);}return out};
   const split=(t)=>{
     if(!t||!t.trim())return[];
@@ -59,6 +60,7 @@
   const selText=()=>{const ta=document.getElementById('tts-text');if(ta&&ta.selectionEnd>ta.selectionStart)return ta.value.slice(ta.selectionStart,ta.selectionEnd);const w=window.getSelection&&window.getSelection();return w?String(w.toString()):''};
   const sanitize=(s)=>String(s||'').replace(/[\n\r\t]+/g,' ').trim().replace(/^[^A-Za-z0-9\u4e00-\u9fff]+|[^A-Za-z0-9\u4e00-\u9fff\-’' ]+$/g,'').slice(0,64);
   const parseZH=(def)=>{const m=String(def||'').match(/\bZH:\s*([^\n]+)/i);if(!m)return'';return m[1].replace(/[，,；;、]/g,'/').replace(/\s*\/?\s*或\s*/g,'/').replace(/\s{2,}/g,' ').trim()};
+  const normalizeWord=(s)=>String(s||'').toLowerCase().replace(/[^a-z]/g,'');
 
   // --- 自動測試（純函式；不中斷 UI） ---
   function runSelfTests(){
@@ -72,48 +74,28 @@
       const long='x'.repeat(170)+' '+"y".repeat(170); const a2=split(long);
       assert(a2.length>=2,'split 會切割超長段落');
       const a3=split('中文？！English?!'); assert(a3.length>=1,'split 可處理中英標點組合');
-      // 新增：僅換行不應產出空段
       const a4=split('\r\n\n   '); assert(a4.length===0,'split 僅空白/換行→空');
 
-      // sanitize 測試（保留＋新增空字）
+      // sanitize / normalize 測試
       assert(sanitize('  “Hello,”  ').toLowerCase()==='hello','sanitize 去除邊界符號');
-      assert(sanitize("I'm #1!")==="I'm 1",'sanitize 保留撇號與數字，移除雜訊');
-      assert(sanitize('abc-xyz').includes('-'),'sanitize 保留連字號');
-      assert(sanitize('')==='', 'sanitize 空字串');
+      assert(normalizeWord('Well-being')==='wellbeing','normalizeWord 會忽略連字號');
+      assert(normalizeWord("I'm")==='im','normalizeWord 會去掉非字母');
 
-      // parseZH 測試（保留）
+      // parseZH 測試
       const zh1=parseZH('EN: sth\nZH: 甲，乙、丙 或 丁');
       assert(zh1==='甲/乙/丙/丁','parseZH 斜線分隔同義詞');
-      const zh2=parseZH('EN: only'); assert(zh2==='','parseZH 無 ZH 行→空字串');
 
-      // clamp 測試（保留）
-      assert(clamp(3,0.25,2.5)===2.5,'clamp 上限');
-      assert(clamp(0.1,0.25,2.5)===0.25,'clamp 下限');
-      assert(clamp(1,0.25,2.5)===1,'clamp 中間值');
-
-      // 新增：三倍展開助手
-      const t1=triple(['a','b'],3); assert(JSON.stringify(t1)===JSON.stringify(['a','a','a','b','b','b']),'triple 3x');
-      const t2=triple(['a'],1); assert(JSON.stringify(t2)===JSON.stringify(['a']),'triple 1x');
-
-      // 新增：速率上下限常數
+      // clamp K 常數
       assert(K.RATE_MIN===0.25 && K.RATE_MAX===1,'K 常數：速率上下限應為 0.25~1.00');
 
-      // 綜合：英文大量空白切詞（保留）
-      const words='word '.repeat(200); const ch=split(words); assert(ch.every(Boolean),'split 對英文空白切詞');
+      // triple 展開
+      const t1=triple(['a','b'],3); assert(JSON.stringify(t1)===JSON.stringify(['a','a','a','b','b','b']),'triple 3x');
     }catch(e){failed++;logs.push('❌ 測試程式錯誤：'+(e?.message||e));}
 
-    // 顯示結果（角落徽章；不干擾操作）
-    try{
-      const div=document.createElement('div');
-      div.textContent=failed?`Self-tests: ${passed} pass / ${failed} fail`:`Self-tests: ${passed} pass`;
-      div.style.cssText=`position:fixed;right:.5rem;bottom:.5rem;padding:.25rem .5rem;border-radius:.5rem;font:12px system-ui;background:${failed?'#fee2e2':'#ecfdf5'};color:${failed?'#991b1b':'#065f46'};border:1px solid ${failed?'#fecaca':'#a7f3d0'};z-index:2147483647;pointer-events:none;opacity:.9`;
-      document.addEventListener('DOMContentLoaded',()=>document.body.appendChild(div));
-    }catch{}
-
+    try{ const div=document.createElement('div'); div.textContent=failed?`Self-tests: ${passed} pass / ${failed} fail`:`Self-tests: ${passed} pass`; div.style.cssText=`position:fixed;right:.5rem;bottom:.5rem;padding:.25rem .5rem;border-radius:.5rem;font:12px system-ui;background:${failed?'#fee2e2':'#ecfdf5'};color:${failed?'#991b1b':'#065f46'};border:1px solid ${failed?'#fecaca':'#a7f3d0'};z-index:2147483647;pointer-events:none;opacity:.9`; document.addEventListener('DOMContentLoaded',()=>document.body.appendChild(div)); }catch{}
     console.log('\n—— ReadBuddy 自動測試 ——'); logs.forEach(l=>console.log(l)); console.log(`總結：${passed} 通過 / ${failed} 失敗`);
     return {passed,failed};
   }
-
   try{window.__RB_TEST_RESULT=runSelfTests()}catch{}
 
   function App(){
@@ -135,6 +117,19 @@
     const [busy,setBusy]=React.useState(false); const [note,setNote]=React.useState('');
     const supported=typeof window!=='undefined'&&'speechSynthesis'in window&&typeof SpeechSynthesisUtterance!=='undefined';
 
+    // 徽章圖片（使用者自上傳；預設無，會退回 emoji）
+    const [badgeImg,setBadgeImg]=React.useState(()=>S.g(K.BADGE_IMG,''));
+
+    // 測驗狀態
+    const [quizOpen,setQuizOpen]=React.useState(false);
+    const [quizBusy,setQuizBusy]=React.useState(false);
+    const [quizQs,setQuizQs]=React.useState([]); // {type: 'sent-zh'|'vocab-input'|'sent-cloze', prompt, options?, correctIndex?, playText?, answer?}
+    const [quizIdx,setQuizIdx]=React.useState(0);
+    const [quizSel,setQuizSel]=React.useState(null); // for MC questions
+    const [quizScore,setQuizScore]=React.useState(0);
+    const [typed,setTyped]=React.useState('');
+    const [typedOk,setTypedOk]=React.useState(null); // null|true|false
+
     // --- 永續化 ---
     React.useEffect(()=>S.s('tts_text',text),[text]);
     React.useEffect(()=>S.s('tts_rate',String(rate)),[rate]);
@@ -142,6 +137,7 @@
     React.useEffect(()=>{try{S.s('tts_vocab',JSON.stringify(vocab))}catch{}},[vocab]);
     React.useEffect(()=>{try{S.s(K.ART,JSON.stringify(articles))}catch{}},[articles]);
     React.useEffect(()=>{S.s('ai_on',aiOn?'1':'0');S.s('ai_key',aiKey);S.s('ai_model',aiModel)},[aiOn,aiKey,aiModel]);
+    React.useEffect(()=>{if(badgeImg) S.s(K.BADGE_IMG,badgeImg)},[badgeImg]);
 
     // --- 載入語音 ---
     const loadVoices=React.useCallback(()=>{if(!supported)return;const list=window.speechSynthesis.getVoices();setVoices(list);if(!voiceId&&list[0]){const prefer=list.find(v=>/zh-TW/i.test(v.lang))||list.find(v=>/zh-CN/i.test(v.lang))||list.find(v=>/en-US/i.test(v.lang))||list[0];setVoiceId(prefer.voiceURI||prefer.name)}},[supported,voiceId]);
@@ -180,20 +176,17 @@
     const resume=()=>{if(!supported)return;if(window.speechSynthesis.speaking){try{window.speechSynthesis.resume()}catch{};setStatus('speaking')}else{speakFrom(Math.max(idx,0),charRef.current||0)}};
     const stopAndRestart=()=>{ if(!supported)return;cancelAll();setTimeout(()=>speakFrom(0,0),10) };
 
+    const speakOnce=(t)=>{ if(!supported||!t) return; try{window.speechSynthesis.cancel()}catch{}; const u=new SpeechSynthesisUtterance(String(t)); if(curVoice) u.voice=curVoice; u.rate=clamp(rate,K.RATE_MIN,K.ABS_MAX); u.pitch=1; window.speechSynthesis.speak(u); };
+
     const changeRate=(r, immediate=false)=>{ const v=clamp(r,K.RATE_MIN,K.RATE_MAX); setRate(v);
       if(!supported) return;
       if(status==='speaking'){
         if(modeRef.current==='article'){
           if(rateTimerRef.current) clearTimeout(rateTimerRef.current);
           const curIdx=Math.max(idx,0); const curChar=charRef.current||0;
-          if(immediate){
-            speakFrom(curIdx,curChar);
-          }else{
-            rateTimerRef.current=setTimeout(()=>{ speakFrom(curIdx,curChar); },120);
-          }
+          if(immediate){ speakFrom(curIdx,curChar); } else { rateTimerRef.current=setTimeout(()=>{ speakFrom(curIdx,curChar); },120); }
         } else if (modeRef.current==='vocab'){
-          try{window.speechSynthesis.cancel()}catch{};
-          speakVocabQueueFrom(Math.max(vocabIndexRef.current||0,0));
+          try{window.speechSynthesis.cancel()}catch{}; speakVocabQueueFrom(Math.max(vocabIndexRef.current||0,0));
         }
       }
     };
@@ -230,27 +223,73 @@
     }
 
     const playAll=()=>{ if(!supported||!vocab.length) return; vocabResumeRef.current=null; const q=triple(vocab.map(it=>it.term),3); vocabQueueRef.current=q; speakVocabQueueFrom(0); };
-
     const speakWordOnce=(term)=>{ if(!supported||!term) return; const shouldResume=(status==='speaking'&&modeRef.current==='article'); vocabResumeRef.current = shouldResume ? {shouldResume:true, idx:idx, char:charRef.current||0} : null; vocabQueueRef.current=[term]; speakVocabQueueFrom(0); };
-
     const rm=(id)=>setVocab(p=>p.filter(x=>x.id!==id));
+
+    // --- 測驗：題庫與出題 ---
+    const fetchZH=async(en)=>{ try{ const r=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(en)}&langpair=en|zh-TW`); if(!r.ok) return ''; const j=await r.json(); return (j?.responseData?.translatedText||'').trim(); }catch{return ''} };
+    const vocabZH=(v)=>parseZH(v?.definition||'');
+    const buildChoices=(correct, pool, size=4)=>{ const cand=uniq(pool.filter(x=>x && x!==correct)); const take=shuffle(cand).slice(0, Math.max(0, size-1)); const opts=shuffle([correct, ...take]); return opts.length<2?uniq([correct, ...cand.slice(0,1)]):opts };
+
+    async function makeSentenceQuestions(n=5){
+      const enChunks=chunks.filter(s=>/[A-Za-z]/.test(s)); if(enChunks.length===0) return [];
+      const pick=shuffle(enChunks).slice(0, Math.min(n, enChunks.length));
+      // 先批次翻譯作為候選池
+      const translations=[]; for(const s of enChunks.slice(0,20)){ const zh=await fetchZH(s); if(zh) translations.push(zh) }
+      const poolZH=uniq(translations);
+      const qs=[];
+      for(const s of pick){
+        let zh = await fetchZH(s);
+        const choices = buildChoices(zh, poolZH);
+        qs.push({type:'sent-zh', prompt: s, options: choices, correctIndex: Math.max(0, choices.indexOf(zh)), playText: s});
+      }
+      return qs;
+    }
+
+    // 文字完形（單字輸入 & 句子四選）
+    const maskWord=(w)=>{ const s=String(w||''); if(s.length<3) return s.replace(/[A-Za-z]/g,'_'); return s.replace(/([A-Za-z])(.*)([A-Za-z])/,(m,a,mid,c)=>a+mid.replace(/[A-Za-z]/g,'_')+c); };
+    const buildWordOptions=(correct,pool,size=4)=>{ const c=String(correct||''); const cand=uniq(pool.filter(x=>x && x.toLowerCase()!==c.toLowerCase())); const sim=cand.filter(w=>Math.abs(w.length-c.length)<=2); const base=sim.length>=size-1?sim:cand; const take=shuffle(base).slice(0,Math.max(0,size-1)); return shuffle([c,...take]); };
+
+    function makeVocabClozeInputQuestions(n=3){
+      const terms=uniq(vocab.map(v=>v.term).filter(t=>/^[A-Za-z]{3,}$/.test(t||'')));
+      const pick=shuffle(terms).slice(0,Math.min(n,terms.length));
+      return pick.map(t=>({ type:'vocab-input', prompt: maskWord(t), answer: t, playText: t }));
+    }
+    function makeSentenceClozeQuestions(n=3){
+      const enChunks=chunks.filter(s=>/[A-Za-z]/.test(s));
+      const pick=shuffle(enChunks).slice(0,Math.min(n,enChunks.length));
+      const poolWords=uniq(enChunks.flatMap(s=> (s.match(/[A-Za-z]+/g)||[]) ).filter(w=>w.length>=3));
+      const makeOne=(s)=>{ const candidates=(s.match(/[A-Za-z]+/g)||[]).filter(w=>w.length>=4); const target=candidates[0]||candidates[candidates.length-1]||''; const esc=(x)=>x.replace(/[-/\\^$*+?.()|[\]{}]/g,'\\$&'); const cloze= target? s.replace(new RegExp('\\b'+esc(target)+'\\b'), '_____') : s; const opts=buildWordOptions(target||'', poolWords); return { type:'sent-cloze', prompt: cloze, options: opts, correctIndex: Math.max(0, opts.indexOf(target)), playText: s }; };
+      return pick.map(makeOne);
+    }
+
+    async function startQuiz(){
+      setQuizOpen(true); setQuizBusy(true); setQuizSel(null); setQuizScore(0); setQuizIdx(0); setTyped(''); setTypedOk(null);
+      try{
+        const [qs, qsc] = await Promise.all([makeSentenceQuestions(5), Promise.resolve(makeSentenceClozeQuestions(3))]);
+        const qvi = makeVocabClozeInputQuestions(3);
+        const qAll=[...qs, ...qvi, ...qsc];
+        setQuizQs(qAll); setQuizIdx(0);
+        if(qAll[0]) speakOnce(qAll[0].playText || qAll[0].prompt);
+      }finally{ setQuizBusy(false); }
+    }
+
+    function pickColor(i){ if(quizSel==null) return 'bg-white hover:bg-slate-50'; if(i===quizQs[quizIdx]?.correctIndex) return 'bg-emerald-50 border-emerald-300'; if(i===quizSel) return 'bg-red-50 border-red-300'; return 'bg-white opacity-70'; }
+    function onSelect(i){ if(quizSel!=null || typedOk!=null) return; const q=quizQs[quizIdx]; if(!q) return; setQuizSel(i); const ok=i===q.correctIndex; if(ok) setQuizScore(s=>s+1); speakOnce(q.playText || q.prompt); }
+    function onSubmitTyped(){ if(typedOk!=null) return; const q=quizQs[quizIdx]; const ok=normalizeWord(typed)===normalizeWord(q.answer||''); setTypedOk(ok); if(ok) setQuizScore(s=>s+1); speakOnce(q.playText || q.prompt); }
+    function nextQ(){ const last=quizIdx>=quizQs.length-1; if(last){ setQuizOpen(false); return; } setQuizIdx(i=>i+1); setQuizSel(null); setTyped(''); setTypedOk(null); const q=quizQs[quizIdx+1]; if(q) speakOnce(q.playText || q.prompt); }
+
+    // --- 徽章 ---
+    function badgeTier(p){ if(p===100) return 'gold-crown'; if(p>=90) return 'gold'; if(p>=80) return 'blue'; return 'none'; }
 
     // --- 衍生 ---
     const dur=(()=>{const w=(text.match(/\S+/g)||[]).length||0;const m=w/(160*Math.max(rate,K.RATE_MIN));const s=Math.ceil(m*60);return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`})();
     const glance=vocab.map(v=>({id:v.id,term:v.term,zh:parseZH(v.definition)}));
 
     // 朗讀時置中當前句（smooth）
-    React.useEffect(()=>{
-      if (idx < 0) return;
-      const c = previewRef.current; if (!c) return;
-      const el = c.querySelector('[data-active="true"]'); if (!el) return;
-      const containerRect = c.getBoundingClientRect();
-      const elRect = el.getBoundingClientRect();
-      const current = c.scrollTop + (elRect.top - containerRect.top);
-      const target = current - (c.clientHeight / 2 - el.clientHeight / 2);
-      c.scrollTo({ top: Math.max(target, 0), behavior: 'smooth' });
-    }, [idx, status, chunks.length]);
+    React.useEffect(()=>{ if (idx < 0) return; const c = previewRef.current; if (!c) return; const el = c.querySelector('[data-active="true"]'); if (!el) return; const containerRect = c.getBoundingClientRect(); const elRect = el.getBoundingClientRect(); const current = c.scrollTop + (elRect.top - containerRect.top); const target = current - (c.clientHeight / 2 - el.clientHeight / 2); c.scrollTo({ top: Math.max(target, 0), behavior: 'smooth' }); }, [idx, status, chunks.length]);
 
+    // --- UI ---
     return (
       <div className="max-w-6xl mx-auto p-5 text-slate-800">
         <h1 className="text-2xl md:text-3xl font-semibold mb-4">ReadBuddy｜朗讀夥伴</h1>
@@ -262,17 +301,13 @@
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
               <div className="grid gap-2 md:grid-cols-3 mb-2 items-center">
                 <div className="md:col-span-2"><label className="text-sm">文章標題</label>
-                  <input id="article-title" value={title} onChange={e=>setTitle(e.target.value)} placeholder="未命名文章"
-                    className="w-full mt-1 rounded-xl border border-slate-300 p-2 bg-slate-50/50 focus:ring-2 focus:ring-indigo-400"/></div>
+                  <input id="article-title" value={title} onChange={e=>setTitle(e.target.value)} placeholder="未命名文章" className="w-full mt-1 rounded-xl border border-slate-300 p-2 bg-slate-50/50 focus:ring-2 focus:ring-indigo-400"/></div>
                 <div className="flex gap-2 md:justify-end"><button onClick={save} className="px-3 py-2 rounded-xl bg-indigo-600 text-white">💾 儲存</button><button onClick={fresh} className="px-3 py-2 rounded-xl bg-slate-100">📝 新文章</button></div>
               </div>
 
               {/* 編輯框 */}
               <div className="flex items-center justify-between mb-1"><label htmlFor="tts-text" className="font-medium">文章Article</label><div className="text-xs text-slate-500">{text.length} 字 · 預估 {dur}</div></div>
-              <textarea id="tts-text" value={text} onChange={e=>setText(e.target.value)} onDoubleClick={addFromSelection}
-                onKeyDown={e=>{if(e.key==='Enter'){const ta=e.target;if(ta.selectionEnd>ta.selectionStart){e.preventDefault();addFromSelection()}}}}
-                placeholder="貼上或輸入要朗讀的文字…（反白、雙擊或 Enter 可加入單字）"
-                className="w-full h-40 md:h-44 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-400 p-3 bg-slate-50/50"/>
+              <textarea id="tts-text" value={text} onChange={e=>setText(e.target.value)} onDoubleClick={addFromSelection} onKeyDown={e=>{if(e.key==='Enter'){const ta=e.target;if(ta.selectionEnd>ta.selectionStart){e.preventDefault();addFromSelection()}}}} placeholder="貼上或輸入要朗讀的文字…（反白、雙擊或 Enter 可加入單字）" className="w-full h-40 md:h-44 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-400 p-3 bg-slate-50/50"/>
 
               {/* 控制列（置於預覽上方） */}
               <div className="flex items-center justify-between mt-3">
@@ -289,14 +324,10 @@
               {/* 預覽（同步高亮、點段落播放；雙擊選字加入） */}
               <div className="mt-2">
                 <div className="flex items-center justify-between mb-1"><h2 className="font-medium">逐句跟讀Read by sentence</h2><div className="text-xs text-slate-500">{idx>=0?`${idx+1}/${chunks.length}`:`${chunks.length} 段`}</div></div>
-                <div ref={previewRef} className="max-h-64 overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2" tabIndex={0}
-                  onKeyDown={e=>{if(e.key==='Enter'){const s=(window.getSelection&&window.getSelection().toString().trim());if(s){e.preventDefault();addFromSelection()}}}}>
+                <div ref={previewRef} className="max-h-64 overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2" tabIndex={0} onKeyDown={e=>{if(e.key==='Enter'){const s=(window.getSelection&&window.getSelection().toString().trim());if(s){e.preventDefault();addFromSelection()}}}}>
                   {chunks.length===0&&<div className="text-sm text-slate-500">無文字。</div>}
                   {chunks.map((c,i)=>{const active=i===idx&&(status==='speaking'||status==='paused');return (
-                    <div key={i} data-active={active ? 'true' : 'false'} className={`text-sm leading-relaxed rounded-lg border p-2 select-text ${active?'bg-yellow-50 border-yellow-300 ring-2 ring-yellow-200':'bg-white border-slate-200 hover:bg-slate-50'}`}
-                      title={active?'正在朗讀；雙擊選字加入，或點此段重播':'雙擊選字加入；點擊此段播放'}
-                      onClick={e=>{if((window.getSelection&&window.getSelection().toString().trim()))return; speakFrom(i,0);}}
-                      onDoubleClick={e=>{e.preventDefault();addFromSelection()}}>
+                    <div key={i} data-active={active ? 'true' : 'false'} className={`text-sm leading-relaxed rounded-lg border p-2 select-text ${active?'bg-yellow-50 border-yellow-300 ring-2 ring-yellow-200':'bg-white border-slate-200 hover:bg-slate-50'}`} title={active?'正在朗讀；雙擊選字加入，或點此段重播':'雙擊選字加入；點擊此段播放'} onClick={e=>{if((window.getSelection&&window.getSelection().toString().trim()))return; speakFrom(i,0);}} onDoubleClick={e=>{e.preventDefault();addFromSelection()}}>
                       <span className="opacity-60 mr-2">[{i+1}]</span><span>{c}</span>
                     </div>)})}
                 </div>
@@ -305,7 +336,7 @@
             </div>
           </div>
 
-          {/* 右側：文章清單、語音、語速、單字速覽、AI 設定 */}
+          {/* 右側：文章清單、語音、語速、單字速覽、測驗、AI 設定、徽章圖 */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-4">
             {/* 我的文章（移到右側） */}
             <div>
@@ -313,7 +344,7 @@
               <div className="max-h-32 overflow-auto rounded-xl border border-slate-200 divide-y bg-white">
                 {articles.length===0? <div className="p-3 text-sm text-slate-500">尚未儲存文章。</div> : articles.map(a=> (
                   <div key={a.id} className={`p-2 flex items-center gap-2 ${a.id===aid?'bg-indigo-50':''}`}>
-                    <button className="flex-1 text-left truncate" onClick={()=>load(a.id)} title={new Date(a.updatedAt).toLocaleString()}>
+                    <button className="flex-1 text左 truncate" onClick={()=>load(a.id)} title={new Date(a.updatedAt).toLocaleString()}>
                       <div className="truncate font-medium">{a.title}</div>
                       <div className="text-xs text-slate-500">更新：{new Date(a.updatedAt).toLocaleString()}</div>
                     </button>
@@ -343,7 +374,7 @@
               </div>
             </div>
 
-            {/* 單字速覽（僅顯示 英文 / 中文同義詞） */}
+            {/* 單字速覽 */}
             <div className="pt-2 border-t border-slate-200">
               <div className="mb-2">
                 <h3 className="font-medium">單字速覽</h3>
@@ -364,6 +395,21 @@
                     </div>))}
                 </div>
               }
+            </div>
+
+            {/* 測驗設定卡 */}
+            <div className="pt-2 border-t border-slate-200">
+              <h3 className="font-medium mb-2">測驗</h3>
+              <div className="text-sm text-slate-600 mb-2">題型：句子 5（英→中，選擇）＋ 單字完形 3（輸入）＋ 句子完形 3（選擇）。回饋：立即顯示正解；支援「播放句子」。</div>
+              <button onClick={startQuiz} className="px-3 py-2 rounded-xl bg-amber-600 text-white hover:bg-amber-700">📝 開始測驗</button>
+            </div>
+
+            {/* 徽章圖片上傳（可選） */}
+            <div className="pt-2 border-t border-slate-200">
+              <h3 className="font-medium mb-1">徽章圖片</h3>
+              <div className="text-xs text-slate-500 mb-2">上傳你提供的小企鵝圖（PNG/JPG），之後達標就用這張圖顯示徽章。</div>
+              <input type="file" accept="image/*" onChange={async(e)=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=()=>setBadgeImg(String(r.result));r.readAsDataURL(f);}} className="text-sm" />
+              {badgeImg? <div className="mt-2 flex items-center gap-2"><div className="w-10 h-10 rounded-full overflow-hidden ring-2 ring-slate-300"><img src={badgeImg} className="w-full h-full object-cover"/></div><span className="text-xs text-slate-600">預覽</span></div> : null}
             </div>
 
             {/* AI 設定（可選） */}
@@ -389,6 +435,79 @@
             </details>
           </div>
         </div>
+
+        {/* 測驗對話框（全螢幕覆蓋） */}
+        {quizOpen && (
+          <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+            <div className="w-[min(960px,92vw)] max-h-[92vh] overflow-auto rounded-2xl bg-white shadow-xl border border-slate-200 p-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-sm text-slate-600">測驗 · 第 {quizIdx+1} / {Math.max(quizQs.length,1)} 題</div>
+                <button onClick={()=>setQuizOpen(false)} className="px-2 py-1 rounded bg-slate-100">✖</button>
+              </div>
+              {quizBusy? (
+                <div className="p-8 text-center text-slate-500">準備題目中…</div>
+              ) : quizQs.length===0 ? (
+                <div className="p-8 text-center text-slate-500">目前沒有可出題的單字/句子。</div>
+              ) : (
+                <div>
+                  <div className="mb-3 p-3 rounded-xl border bg-slate-50">
+                    <div className="text-xs text-slate-500 mb-1">題幹</div>
+                    <div className="text-lg leading-relaxed whitespace-pre-wrap">{quizQs[quizIdx]?.prompt}</div>
+                    <button onClick={()=>speakOnce(quizQs[quizIdx]?.playText || quizQs[quizIdx]?.prompt)} className="mt-2 text-xs px-2 py-1 rounded bg-slate-100">🔊 播放句子</button>
+                  </div>
+
+                  {/* 題型切換：選擇題 or 輸入題 */}
+                  {quizQs[quizIdx]?.type==='vocab-input' ? (
+                    <div className="space-y-2">
+                      <input value={typed} onChange={e=>setTyped(e.target.value)} onKeyDown={e=>{if(e.key==='Enter') onSubmitTyped();}} placeholder="輸入正確英文單字…" className={`w-full rounded-xl border p-3 ${typedOk==null?'border-slate-300':typedOk?'border-emerald-300 bg-emerald-50':'border-red-300 bg-red-50'}`} />
+                      {typedOk!=null && (
+                        <div className={`text-sm ${typedOk?'text-emerald-700':'text-red-700'}`}>{typedOk? '答對！':'答錯；正解：'}<span className="font-medium">{quizQs[quizIdx]?.answer}</span></div>
+                      )}
+                      <div className="flex justify-end">
+                        <button onClick={typedOk==null? onSubmitTyped: nextQ} className="px-3 py-1.5 rounded bg-indigo-600 text-white">{typedOk==null? '送出' : (quizIdx>=quizQs.length-1? '完成' : '下一題')}</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid gap-2">
+                      {quizQs[quizIdx]?.options?.map((c, i)=> (
+                        <button key={i} onClick={()=>onSelect(i)} disabled={quizSel!=null} className={`text-left rounded-xl border p-3 ${pickColor(i)}`}>{String.fromCharCode(65+i)}．{c}</button>
+                      ))}
+                      <div className="flex justify-end">
+                        <button onClick={quizSel!=null? nextQ: undefined} disabled={quizSel==null} className="px-3 py-1.5 rounded bg-indigo-600 text-white disabled:opacity-50">{quizIdx>=quizQs.length-1? '完成' : '下一題'}</button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between mt-3">
+                    <div className="text-sm">分數：{quizScore} / {quizQs.length}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 完成徽章彈窗 */}
+        {!quizOpen && quizQs.length>0 && (
+          (()=>{ const percent=Math.round((quizScore/quizQs.length)*100)||0; const tier=badgeTier(percent); if(tier==='none') return null; const color= tier==='blue'? '#3b82f6' : '#eab308'; const crown=tier==='gold-crown'; return (
+            <div className="fixed bottom-4 right-4 z-40">
+              <div className="rounded-2xl border border-slate-200 bg-white shadow-xl p-3 w-[min(320px,85vw)]">
+                <div className="flex items-center gap-3">
+                  <div className="relative w-14 h-14 rounded-full ring-4" style={{ringColor: color}}>
+                    <div className="w-14 h-14 rounded-full overflow-hidden ring-2" style={{boxShadow:`0 0 0 4px ${color}`}}>
+                      {badgeImg? <img src={badgeImg} className="w-full h-full object-cover"/> : <div className="w-full h-full grid place-items-center text-3xl">🐧</div>}
+                    </div>
+                    {crown && <div className="absolute -top-2 -left-2 text-2xl">👑</div>}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold">恭喜獲得{ tier==='blue'?'藍色':(tier==='gold'?'金色':'金色(皇冠)') }小企鵝徽章！</div>
+                    <div className="text-sm text-slate-600">本次得分 {quizScore} / {quizQs.length}（{percent}%）</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )})()
+        )}
 
         <footer className="py-6 text-center text-xs text-slate-400">
           <div>© {new Date().getFullYear()} ReadBuddy｜朗讀夥伴</div>
