@@ -31,7 +31,7 @@
   <script type="text/babel" data-presets="env,react" data-plugins="proposal-optional-chaining,proposal-nullish-coalescing-operator">
   // ======================================
   // ReadBuddy ＋ 測驗題（英→中 + 完形填空[單字輸入]）
-  // - 題庫：隨機句子 4（英→中，選擇題）、句子完形 3（選擇填空）、單字完形 3（輸入填空）
+  // - 題庫：隨機句子 5（英→中，選擇題）、句子完形 5（選擇填空）、單字完形 5（輸入填空）
   // - 回饋：作答後立即顯示正解；提供「播放句子」
   // - 介面：全螢幕覆蓋對話框
   // - 既有功能維持：逐句朗讀/置中、語速 0.25~1.0 即時變更、單字速覽點一下播放 1 次、右欄布局等
@@ -402,7 +402,7 @@
     }
 
     // 新增題型：從文章隨機選出一個句子，4選1中文翻譯
-    async function makeRandomSentenceQuestions(n=4){
+    async function makeRandomSentenceQuestions(n=5){
       const enChunks=chunks.filter(s=>/[A-Za-z]/.test(s)); 
       if(enChunks.length===0) return [];
       
@@ -446,12 +446,12 @@
     const maskWord=(w)=>{ const s=String(w||''); if(s.length<3) return s.replace(/[A-Za-z]/g,'_'); return s.replace(/([A-Za-z])(.*)([A-Za-z])/,(m,a,mid,c)=>a+mid.replace(/[A-Za-z]/g,'_')+c); };
     const buildWordOptions=(correct,pool,size=4)=>{ const c=String(correct||''); const cand=uniq(pool.filter(x=>x && x.toLowerCase()!==c.toLowerCase())); const sim=cand.filter(w=>Math.abs(w.length-c.length)<=2); const base=sim.length>=size-1?sim:cand; const take=shuffle(base).slice(0,Math.max(0,size-1)); return shuffle([c,...take]); };
 
-    function makeVocabClozeInputQuestions(n=3){
+    function makeVocabClozeInputQuestions(n=5){
       const terms=uniq(vocab.map(v=>v.term).filter(t=>/^[A-Za-z]{3,}$/.test(t||'')));
       const pick=shuffle(terms).slice(0,Math.min(n,terms.length));
       return pick.map(t=>({ type:'vocab-input', prompt: maskWord(t), answer: t, playText: t }));
     }
-    function makeSentenceClozeQuestions(n=3){
+    function makeSentenceClozeQuestions(n=5){
       const enChunks=chunks.filter(s=>/[A-Za-z]/.test(s));
       const pick=shuffle(enChunks).slice(0,Math.min(n,enChunks.length));
       const poolWords=uniq(enChunks.flatMap(s=> (s.match(/[A-Za-z]+/g)||[]) ).filter(w=>w.length>=3));
@@ -463,9 +463,9 @@
       setQuizOpen(true); setQuizBusy(true); setQuizSel(null); setQuizScore(0); setQuizIdx(0); setTyped(''); setTypedOk(null); setHasRetried(false);
       try{
         const [qrs, qsc, qvi] = await Promise.all([
-          makeRandomSentenceQuestions(4),
-          Promise.resolve(makeSentenceClozeQuestions(3)),
-          Promise.resolve(makeVocabClozeInputQuestions(3))
+          makeRandomSentenceQuestions(5),
+          Promise.resolve(makeSentenceClozeQuestions(5)),
+          Promise.resolve(makeVocabClozeInputQuestions(5))
         ]);
         const qAll=[...qrs, ...qsc, ...qvi];
         setQuizQs(qAll); setQuizIdx(0);
@@ -678,7 +678,7 @@
             <div className="pt-2 border-t border-slate-200">
               <h3 className="font-medium mb-2">測驗</h3>
               <div className="text-sm text-slate-600 mb-2">
-                題型：隨機句子 4（英→中，選擇）＋ 句子完形 3（選擇填空）＋ 單字完形 3（輸入填空）<br/>
+                題型：隨機句子 5（英→中，選擇）＋ 句子完形 5（選擇填空）＋ 單字完形 5（輸入填空）<br/>
                 回饋：立即顯示正解；支援「播放句子」。
               </div>
               <button onClick={startQuiz} className="px-3 py-2 rounded-xl bg-amber-600 text-white hover:bg-amber-700">📝 開始測驗</button>
