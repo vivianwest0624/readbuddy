@@ -60,9 +60,25 @@
   const selText=()=>{const ta=document.getElementById('tts-text');if(ta&&ta.selectionEnd>ta.selectionStart)return ta.value.slice(ta.selectionStart,ta.selectionEnd);const w=window.getSelection&&window.getSelection();return w?String(w.toString()):''};
   const sanitize=(s)=>String(s||'').replace(/[\n\r\t]+/g,' ').trim().replace(/^[^A-Za-z0-9\u4e00-\u9fff]+|[^A-Za-z0-9\u4e00-\u9fff\-’' ]+$/g,'').slice(0,64);
     const parseZH=(def)=>{
-      const m=String(def||'').match(/ZH:\s*([^\n]+)/i);
+      const text = String(def||'').trim();
+      if(!text) return '';
+      
+      // 嘗試多種格式匹配
+      let m = text.match(/ZH:\s*([^\n\r]+)/i);
+      if(!m) m = text.match(/中文[：:]\s*([^\n\r]+)/i);
+      if(!m) m = text.match(/翻譯[：:]\s*([^\n\r]+)/i);
+      if(!m) m = text.match(/^([^E\n\r]+)$/i); // 如果沒有EN:開頭，可能是純中文
+      
       if(!m) return '';
-      return m[1].replace(/[，,；;、]/g,'/').replace(/\s*\/?\s*或\s*/g,'/').replace(/\s{2,}/g,' ').trim();
+      
+      let result = m[1].trim();
+      // 清理和格式化
+      result = result.replace(/[，,；;、]/g,'/').replace(/\s*\/?\s*或\s*/g,'/').replace(/\s{2,}/g,' ').trim();
+      
+      // 如果結果太短或看起來不像中文，返回空
+      if(result.length < 2 || !/[\u4e00-\u9fff]/.test(result)) return '';
+      
+      return result;
     };
   const normalizeWord=(s)=>String(s||'').toLowerCase().replace(/[^a-z]/g,'');
 
@@ -132,6 +148,8 @@
     const [typed,setTyped]=React.useState('');
     const [typedOk,setTypedOk]=React.useState(null); // null|true|false
     const [hasRetried,setHasRetried]=React.useState(false); // 是否已經重試過
+    const [editingWord,setEditingWord]=React.useState(null); // 正在編輯的單字ID
+    const [editDefinition,setEditDefinition]=React.useState(''); // 編輯中的定義
 
     // --- 永續化 ---
     React.useEffect(()=>S.s('tts_text',text),[text]);
@@ -375,6 +393,30 @@
       }finally{
         setBusy(false);
       }
+    };
+
+    // 開始編輯單字定義
+    const startEditWord=(id)=>{
+      const word=vocab.find(v=>v.id===id);
+      if(!word) return;
+      setEditingWord(id);
+      setEditDefinition(word.definition||'');
+    };
+
+    // 取消編輯
+    const cancelEditWord=()=>{
+      setEditingWord(null);
+      setEditDefinition('');
+    };
+
+    // 儲存編輯的定義
+    const saveEditWord=()=>{
+      if(!editingWord) return;
+      setVocab(p=>p.map(v=>v.id===editingWord?{...v,definition:editDefinition}:v));
+      save();
+      setNote(`已更新定義：${vocab.find(v=>v.id===editingWord)?.term}`);
+      setEditingWord(null);
+      setEditDefinition('');
     };
 
 
@@ -641,7 +683,8 @@
                 </div>
                 <div className="text-xs text-slate-500 mt-1">
                   提示：雙擊文章中的字詞可加入單字庫，系統會自動翻譯<br/>
-                  使用 Google 翻譯，提供高品質中文翻譯
+                  使用 Google 翻譯，提供高品質中文翻譯<br/>
+                  <span className="text-blue-600">💡 點擊 ✏️ 可手動編輯翻譯內容，支援多種格式</span>
                   {translationStats.total > 0 && (
                     <div className="mt-1 text-xs">
                       翻譯統計：Google {translationStats.google} | 總計 {translationStats.total}
@@ -652,23 +695,47 @@
               {glance.length===0? <div className="text-sm text-slate-500">尚未加入單字。雙擊文章中的字詞可加入。</div> :
                 <div className="max-h-60 overflow-auto md:max-h-none md:overflow-visible rounded-xl border border-slate-200 divide-y">
                   {glance.map(g=> (
-                    <div key={g.id} className="flex items-center gap-2 p-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1">
-                          <button type="button" onClick={()=>speakWordOnce(g.term)} className="font-semibold truncate text-left cursor-pointer hover:underline text-blue-800 hover:text-blue-900" title="點擊播放 1 次">{g.term}</button>
-                          {g.zh ? (
-                            <span className="text-xs text-emerald-600" title="有中文翻譯">✓</span>
-                          ) : (
-                            <span className="text-xs text-yellow-600" title="無中文翻譯">⚠</span>
-                          )}
-                          <span className="text-xs text-slate-400" title="使用 Google 翻譯">🌐</span>
+                    <div key={g.id} className="p-2">
+                      {editingWord === g.id ? (
+                        // 編輯模式
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-1">
+                            <span className="font-semibold text-blue-800">{g.term}</span>
+                            <span className="text-xs text-slate-400">✏️ 編輯中</span>
+                          </div>
+                          <textarea 
+                            value={editDefinition} 
+                            onChange={e=>setEditDefinition(e.target.value)}
+                            placeholder="輸入定義，支援多種格式：&#10;• ZH: 中文翻譯&#10;• 中文：翻譯內容&#10;• 翻譯：內容&#10;• 純中文內容"
+                            className="w-full text-xs p-2 border border-slate-300 rounded resize-none h-16"
+                          />
+                          <div className="flex gap-1">
+                            <button onClick={saveEditWord} className="px-2 py-1 text-xs rounded bg-emerald-600 text-white">💾 儲存</button>
+                            <button onClick={cancelEditWord} className="px-2 py-1 text-xs rounded bg-slate-100 text-slate-600">❌ 取消</button>
+                          </div>
                         </div>
-                        {g.zh?<div className="text-xs text-slate-500 truncate">{g.zh}</div>:<div className="text-xs text-slate-400 italic">無中文翻譯 - 點擊🔄重新翻譯</div>}
-                      </div>
-                      <div className="flex gap-1">
-                        {!g.zh&&<button onClick={()=>retranslateWord(g.id)} disabled={busy} className="px-2 py-1 text-xs rounded bg-yellow-50 text-yellow-700 border border-yellow-200 disabled:opacity-50" title="重新翻譯">🔄</button>}
-                        <button onClick={()=>rm(g.id)} className="px-2 py-1 text-xs rounded bg-red-50 text-red-700 border border-red-200">刪</button>
-                      </div>
+                      ) : (
+                        // 顯示模式
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1">
+                              <button type="button" onClick={()=>speakWordOnce(g.term)} className="font-semibold truncate text-left cursor-pointer hover:underline text-blue-800 hover:text-blue-900" title="點擊播放 1 次">{g.term}</button>
+                              {g.zh ? (
+                                <span className="text-xs text-emerald-600" title="有中文翻譯">✓</span>
+                              ) : (
+                                <span className="text-xs text-yellow-600" title="無中文翻譯">⚠</span>
+                              )}
+                              <span className="text-xs text-slate-400" title="使用 Google 翻譯">🌐</span>
+                            </div>
+                            {g.zh?<div className="text-xs text-slate-500 truncate">{g.zh}</div>:<div className="text-xs text-slate-400 italic">無中文翻譯 - 點擊🔄重新翻譯</div>}
+                          </div>
+                          <div className="flex gap-1">
+                            <button onClick={()=>startEditWord(g.id)} className="px-2 py-1 text-xs rounded bg-blue-50 text-blue-700 border border-blue-200" title="編輯定義">✏️</button>
+                            {!g.zh&&<button onClick={()=>retranslateWord(g.id)} disabled={busy} className="px-2 py-1 text-xs rounded bg-yellow-50 text-yellow-700 border border-yellow-200 disabled:opacity-50" title="重新翻譯">🔄</button>}
+                            <button onClick={()=>rm(g.id)} className="px-2 py-1 text-xs rounded bg-red-50 text-red-700 border border-red-200">刪</button>
+                          </div>
+                        </div>
+                      )}
                     </div>))}
                 </div>
               }
