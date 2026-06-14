@@ -144,7 +144,8 @@
 
           <div class="controls">
             <div class="speed"><span>速度</span><input type="range" id="speed" min="0.5" max="2" step="0.25" value="1" /><span class="val" id="speedVal">1x</span></div>
-            <div class="toggle on" id="loopToggle"><span class="sw"></span><span>單句循環</span></div>
+            <div class="speed" title="若字幕比聲音快或慢,用這裡微調對齊"><span>字幕對齊</span><button class="btn ghost sm" id="offMinus">−0.5s</button><span class="val" id="offVal">0.0s</span><button class="btn ghost sm" id="offPlus">+0.5s</button></div>
+            <div class="toggle" id="loopToggle"><span class="sw"></span><span>單句循環</span></div>
             <div class="toggle" id="zhToggle"><span class="sw"></span><span>顯示中譯</span></div>
           </div>
           <div class="row" style="margin-top:12px">
@@ -163,8 +164,8 @@
           <div class="subPanel" id="subPanel"></div>
 
           <details style="margin-top:12px" id="transBox">
-            <summary>📋 貼上逐字稿 / 字幕(換新影片必做)</summary>
-            <p class="hint" style="margin:8px 0">在 YouTube 影片下方點「⋯ 更多 → 顯示轉錄稿(Show transcript)」,全選複製後貼到這裡,按「套用」。也支援 SRT / VTT 字幕檔內容。</p>
+            <summary>📋 貼上逐字稿 / 字幕(換新影片必做,字幕最準)</summary>
+            <p class="hint" style="margin:8px 0">在 YouTube 影片下方點「⋯ 更多 → 顯示轉錄稿(Show transcript)」,全選複製後貼到這裡,按「套用」。也支援 SRT / VTT 字幕檔內容。這樣時間碼最精準。</p>
             <textarea class="field" id="transInput" placeholder="0:00 Thank you. I'm honored to be with you today.&#10;0:14 at your commencement from one of the finest..."></textarea>
             <div class="row" style="margin-top:8px">
               <button class="btn sm" id="applyTrans">套用字幕</button>
@@ -237,43 +238,40 @@
 
 <script src="https://www.youtube.com/iframe_api"></script>
 <script>
-/* ============ 示範影片 + 字幕(Steve Jobs 史丹佛演講) ============ */
+/* ============ 示範影片 + 字幕(Steve Jobs 史丹佛演講,連續開頭段) ============ */
 const DEMO_VIDEO="UF8uR6Z6KLc";
 const DEMO_SUBS=[
   {t:9,en:"Thank you. I'm honored to be with you today,",zh:"謝謝。今天能與各位同在,我深感榮幸,"},
-  {t:14,en:"at your commencement from one of the finest universities in the world.",zh:"在這所世界頂尖大學的畢業典禮上。"},
-  {t:21,en:"I never graduated from college.",zh:"我從沒從大學畢業。"},
-  {t:25,en:"Truth be told, this is the closest I've ever gotten to a college graduation.",zh:"老實說,這是我離大學畢業最近的一次。"},
-  {t:33,en:"Today I want to tell you three stories from my life.",zh:"今天我想說三個我人生中的故事。"},
-  {t:39,en:"That's it. No big deal. Just three stories.",zh:"就這樣,沒什麼大不了,只是三個故事。"},
-  {t:46,en:"The first story is about connecting the dots.",zh:"第一個故事是關於「串起生命中的點」。"},
-  {t:54,en:"I dropped out of Reed College after the first six months,",zh:"我念里德學院六個月後就退學了,"},
-  {t:61,en:"but then stayed around as a drop-in for another eighteen months or so before I really quit.",zh:"但之後又旁聽了大約十八個月才真正離開。"},
-  {t:71,en:"So why did I drop out?",zh:"那我為什麼退學呢?"},
-  {t:80,en:"You can't connect the dots looking forward;",zh:"你無法預先把這些點連起來;"},
-  {t:85,en:"you can only connect them looking backwards.",zh:"只有回頭看時才能把它們串起來。"},
-  {t:91,en:"So you have to trust that the dots will somehow connect in your future.",zh:"所以你必須相信,這些點會在未來以某種方式相連。"},
-  {t:108,en:"This approach has never let me down, and it has made all the difference in my life.",zh:"這個信念從未讓我失望,並徹底改變了我的人生。"}
+  {t:13.5,en:"at your commencement from one of the finest universities in the world.",zh:"在這所世界頂尖大學的畢業典禮上。"},
+  {t:20,en:"I never graduated from college.",zh:"我從沒從大學畢業。"},
+  {t:24,en:"Truth be told, this is the closest I've ever gotten to a college graduation.",zh:"老實說,這是我離大學畢業最近的一次。"},
+  {t:31,en:"Today I want to tell you three stories from my life.",zh:"今天我想說三個我人生中的故事。"},
+  {t:37,en:"That's it. No big deal. Just three stories.",zh:"就這樣,沒什麼大不了,只是三個故事。"},
+  {t:43,en:"The first story is about connecting the dots.",zh:"第一個故事是關於「串起生命中的點」。"},
+  {t:50,en:"I dropped out of Reed College after the first six months,",zh:"我念里德學院六個月後就退學了,"},
+  {t:57,en:"but then stayed around as a drop-in for another eighteen months or so before I really quit.",zh:"但之後又旁聽了大約十八個月才真正離開。"},
+  {t:67,en:"So why did I drop out?",zh:"那我為什麼退學呢?"}
 ];
 const STOP=new Set("a an the and or but to of in on at is am are was were be been being i you he she it we they this that for with as from your my our his her its do not don't so why".split(" "));
 
 /* ============ 狀態 ============ */
 let player,ready=false,apiReady=false;
 let subs=DEMO_SUBS.map(s=>({...s}));
-let curLine=-1, loopOn=true, zhOn=false, rate=1;
+let curLine=-1, loopOn=false, zhOn=false, rate=1, subOffset=0;
 let curVideo=DEMO_VIDEO;
 let vocab=loadVocab();
 const synth=window.speechSynthesis||null; let enVoice=null;
 function loadVoices(){ if(!synth)return; const vs=synth.getVoices(); enVoice=vs.find(v=>/en[-_]US/i.test(v.lang))||vs.find(v=>/^en/i.test(v.lang))||null; }
 if(synth){ loadVoices(); synth.onvoiceschanged=loadVoices; }
 function say(w){ if(!synth)return; synth.cancel(); const u=new SpeechSynthesisUtterance(w); u.lang='en-US'; if(enVoice)u.voice=enVoice; synth.speak(u); }
+function et(i){ return subs[i].t + subOffset; }   // 套用字幕對齊偏移後的時間
 
 /* ============ 環境提示 ============ */
 (function envCheck(){
   const b=document.getElementById('envBanner');
   if(location.protocol==='file:'){
     b.className='banner warn';
-    b.innerHTML='⚠️ 你正用「本機檔案」開啟,YouTube 可能顯示「錯誤 153」無法播放。請改用隨附的 <b>啟動 EchoLearn.bat</b>(以 http://localhost 開啟),或把本頁放到任一網頁伺服器。其餘功能(字幕、單字、測驗)不受影響。';
+    b.innerHTML='⚠️ 你正用「本機檔案」開啟,YouTube 可能顯示「錯誤 153」無法播放。請把本頁放到網頁伺服器或 GitHub Pages 等 https 網址開啟。其餘功能(字幕、單字、測驗)不受影響。';
   }else{
     b.className='banner ok';
     b.innerHTML='✅ 目前以 '+location.protocol+'//'+location.host+' 載入,YouTube 影片可正常播放。';
@@ -287,25 +285,23 @@ function createPlayer(id){
   ready=false;
   player=new YT.Player('player',{
     videoId:id, host:'https://www.youtube-nocookie.com',
-    playerVars:{rel:0,modestbranding:1,playsinline:1,origin:location.origin},
+    playerVars:{rel:0,modestbranding:1,playsinline:1,iv_load_policy:3,origin:location.origin},
     events:{ onReady:()=>{ready=true; if(player.setPlaybackRate)player.setPlaybackRate(rate);}, onError:e=>showErr(e.data) }
   });
 }
 function showErr(code){
   const box=document.querySelector('.videoBox');
-  box.innerHTML='<div class="ph"><div style="font-size:34px">📺</div><div style="font-weight:800;margin:8px 0 4px">影片無法播放(代碼 '+code+')</div><div class="hint" style="max-width:380px">'+
-    (location.protocol==='file:'?'請改用 <b>啟動 EchoLearn.bat</b> 以 http://localhost 開啟;':'此影片可能禁止內嵌或有地區/年齡限制,')+
-    '也可以換一支影片再試。</div></div>';
+  box.innerHTML='<div class="ph"><div style="font-size:34px">📺</div><div style="font-weight:800;margin:8px 0 4px">影片無法播放(代碼 '+code+')</div><div class="hint" style="max-width:380px">此影片可能禁止內嵌或有地區/年齡限制,換一支影片再試。</div></div>';
 }
 setInterval(()=>{
   if(!ready||!player||!player.getCurrentTime) return;
   let tt; try{ tt=player.getCurrentTime(); }catch(e){ return; }
   if(!subs.length) return;
   if(loopOn && curLine>=0){
-    const end=subs[curLine+1]?subs[curLine+1].t:subs[curLine].t+8;
-    if(tt>=end-0.05){ player.seekTo(subs[curLine].t,true); return; }
+    const end=(subs[curLine+1]?subs[curLine+1].t:subs[curLine].t+8)+subOffset;
+    if(tt>=end-0.05){ player.seekTo(et(curLine),true); return; }
   }
-  let idx=-1; for(let i=0;i<subs.length;i++){ if(tt>=subs[i].t-0.3) idx=i; else break; }
+  let idx=-1; for(let i=0;i<subs.length;i++){ if(tt>=et(i)-0.3) idx=i; else break; }
   if(idx!==curLine) setActive(idx,false);
 },250);
 
@@ -328,7 +324,7 @@ function setActive(i,seek){
   curLine=i;
   document.querySelectorAll('.subLine').forEach(el=>el.classList.toggle('active',+el.dataset.i===i));
   const el=document.querySelector('.subLine[data-i="'+i+'"]'); if(el)el.scrollIntoView({block:'nearest',behavior:'smooth'});
-  if(seek&&ready&&i>=0){ player.seekTo(subs[i].t,true); player.playVideo(); }
+  if(seek&&ready&&i>=0){ player.seekTo(Math.max(0,et(i)),true); player.playVideo(); }
 }
 document.getElementById('subPanel').addEventListener('click',e=>{
   const w=e.target.closest('w'); if(w){ quickAddWord(w.dataset.w); return; }
@@ -372,7 +368,7 @@ document.getElementById('applyTrans').addEventListener('click',()=>{
   const parsed=parseTranscript(document.getElementById('transInput').value);
   const msg=document.getElementById('transMsg');
   if(!parsed.length){ msg.style.color='var(--bad)'; msg.textContent='解析不到時間碼,請確認有貼到含時間的逐字稿。'; return; }
-  subs=parsed; curLine=-1; renderSubs();
+  subs=parsed; curLine=-1; subOffset=0; document.getElementById('offVal').textContent='0.0s'; renderSubs();
   msg.style.color='var(--accent2)'; msg.textContent='已套用 '+parsed.length+' 句字幕 ✅';
   document.getElementById('transBox').open=false;
 });
@@ -385,6 +381,9 @@ function quickAddWord(w){ if(vocab.some(v=>v.word===w)){ toast('「'+w+'」已�
 /* ============ 控制 ============ */
 const speed=document.getElementById('speed');
 speed.addEventListener('input',()=>{ rate=parseFloat(speed.value); document.getElementById('speedVal').textContent=rate+'x'; if(ready&&player.setPlaybackRate)player.setPlaybackRate(rate); });
+function setOffset(d){ subOffset=Math.round((subOffset+d)*10)/10; document.getElementById('offVal').textContent=(subOffset>0?'+':'')+subOffset.toFixed(1)+'s'; }
+document.getElementById('offMinus').addEventListener('click',()=>setOffset(-0.5));
+document.getElementById('offPlus').addEventListener('click',()=>setOffset(0.5));
 document.getElementById('loopToggle').addEventListener('click',function(){ loopOn=!loopOn; this.classList.toggle('on',loopOn); });
 document.getElementById('zhToggle').addEventListener('click',function(){ zhOn=!zhOn; this.classList.toggle('on',zhOn); document.querySelectorAll('.subLine').forEach(el=>el.classList.toggle('showzh',zhOn)); });
 document.getElementById('replayLine').addEventListener('click',()=>setActive(curLine<0?0:curLine,true));
@@ -395,7 +394,7 @@ document.getElementById('loadBtn').addEventListener('click',()=>{
   if(!id){ toast('看不懂這個 YouTube 連結'); return; }
   curVideo=id;
   if(player&&player.loadVideoById){ try{ player.loadVideoById(id); }catch(e){ createPlayer(id); } } else createPlayer(id);
-  subs=[]; curLine=-1; renderSubs();
+  subs=[]; curLine=-1; subOffset=0; document.getElementById('offVal').textContent='0.0s'; renderSubs();
   document.getElementById('nowPlaying').textContent='自訂影片';
   document.getElementById('transBox').open=true;
   toast('影片已載入。請貼上逐字稿來同步字幕。');
@@ -409,8 +408,8 @@ function seedVocab(){ return [
   {word:'commencement',mean:'畢業典禮',note:'at your commencement',date:2},
   {word:'graduate',mean:'畢業',note:'I never graduated from college.',date:3},
   {word:'connect',mean:'連接;串起',note:'connecting the dots',date:4},
-  {word:'trust',mean:'相信;信任',note:'you have to trust...',date:5},
-  {word:'approach',mean:'方法;態度',note:'This approach has never let me down.',date:6}
+  {word:'truth',mean:'事實;真相',note:'Truth be told...',date:5},
+  {word:'story',mean:'故事',note:'three stories from my life',date:6}
 ]; }
 function saveVocab(){ try{localStorage.setItem('echolearn_vocab',JSON.stringify(vocab));}catch(e){} document.getElementById('vCount').textContent=vocab.length; }
 function renderVocab(){
@@ -440,7 +439,7 @@ function startQuiz(){ const type=document.getElementById('qType').value,len=docu
   else{ pool=shuffle(subs.filter(s=>{const n=s.en.split(/\s+/).length;return n>=3&&n<=14;})); if(!pool.length){ document.getElementById('quizNotice').innerHTML='<div class="notice">沒有合適的字幕句可出題,請先在學習頁貼上字幕。</div>'; return; } }
   const n=len==='all'?pool.length:Math.min(parseInt(len),pool.length);
   quiz={type,items:pool.slice(0,n),idx:0,score:0}; document.getElementById('qTotal').textContent=quiz.items.length; show('quizRun'); renderQ(); }
-function playSeg(it){ if(ready&&player.seekTo){ player.seekTo(it.t,true); player.playVideo(); const idx=subs.indexOf(it); const end=subs[idx+1]?subs[idx+1].t:it.t+6; setTimeout(()=>{ if(ready)player.pauseVideo(); },Math.max(800,(end-it.t)*1000/rate)); } else say(it.en); }
+function playSeg(it){ if(ready&&player.seekTo){ const start=Math.max(0,it.t+subOffset); player.seekTo(start,true); player.playVideo(); const idx=subs.indexOf(it); const end=(subs[idx+1]?subs[idx+1].t:it.t+6)+subOffset; setTimeout(()=>{ if(ready)player.pauseVideo(); },Math.max(800,(end-(it.t+subOffset))*1000/rate)); } else say(it.en); }
 function renderQ(){
   const c=document.getElementById('qContent'); document.getElementById('qFbk').textContent=''; document.getElementById('qNext').style.display='none';
   document.getElementById('qNow').textContent=quiz.idx+1; document.getElementById('qScore').textContent=quiz.score; document.getElementById('qBar').style.width=(quiz.idx/quiz.items.length*100)+'%';
@@ -481,7 +480,6 @@ function toast(msg){ let t=document.getElementById('toast'); if(!t){ t=document.
 
 /* ============ 初始化 ============ */
 renderSubs(); renderVocab(); saveVocab();
-// 預先填入示範逐字稿,方便了解格式
 document.getElementById('transInput').value=DEMO_SUBS.map(s=>fmt(s.t)+' '+s.en).join('\n');
 </script>
 </body>
