@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="referrer" content="strict-origin-when-cross-origin" />
+<title>EchoLearn · YouTube 英文跟讀學習</title>
+<style>
+  :root{
+    --bg:#0f1226; --bg2:#161a3a; --card:#1c2150; --card2:#232a66;
+    --line:#2e3678; --txt:#eef1ff; --muted:#9aa3d6; --accent:#6c8bff;
+    --accent2:#27d6a3; --warn:#ffb454; --bad:#ff6b8a; --good:#27d6a3;
+    --shadow:0 10px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,-apple-system,sans-serif;
+    background:radial-gradient(1200px 700px at 80% -10%,#222a66 0%,transparent 60%),radial-gradient(900px 600px at -10% 110%,#193a4d 0%,transparent 55%),var(--bg);
+    color:var(--txt);min-height:100vh}
+  .wrap{max-width:1150px;margin:0 auto;padding:18px 16px 60px}
+  header.top{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+  .logo{font-size:22px;font-weight:800;letter-spacing:.5px;display:flex;align-items:center;gap:8px}
+  .logo .dot{width:12px;height:12px;border-radius:50%;background:var(--accent2);box-shadow:0 0 14px var(--accent2)}
+  .sub{color:var(--muted);font-size:13px}
+  nav.tabs{display:flex;gap:6px;background:var(--bg2);padding:6px;border-radius:14px;margin-left:auto;border:1px solid var(--line)}
+  nav.tabs button{background:transparent;border:0;color:var(--muted);font-weight:700;font-size:14px;padding:9px 16px;border-radius:10px;cursor:pointer;transition:.15s;font-family:inherit}
+  nav.tabs button.active{background:linear-gradient(135deg,var(--accent),#8a6bff);color:#fff;box-shadow:var(--shadow)}
+  nav.tabs button:hover:not(.active){color:var(--txt)}
+  .view{display:none;animation:fade .25s ease}
+  .view.active{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .grid{display:grid;grid-template-columns:1fr;gap:16px}
+  @media(min-width:920px){.grid.learn{grid-template-columns:1.1fr .9fr}}
+  .card{background:linear-gradient(180deg,var(--card),var(--bg2));border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow)}
+  .card .hd{padding:14px 16px;border-bottom:1px solid var(--line);font-weight:800;display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap}
+  .card .bd{padding:14px 16px}
+  .banner{margin-bottom:14px;border-radius:12px;padding:11px 14px;font-size:13px;line-height:1.6;display:none}
+  .banner.warn{display:block;background:rgba(255,180,84,.12);border:1px solid var(--warn);color:#ffe2b8}
+  .banner.ok{display:block;background:rgba(39,214,163,.12);border:1px solid var(--accent2);color:#bff7e4}
+  .urlbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .urlbar .field{flex:1;min-width:180px}
+  .videoBox{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:14px;overflow:hidden}
+  .videoBox #player{position:absolute;inset:0;width:100%;height:100%}
+  .videoBox .ph{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:center;color:var(--muted);text-align:center;padding:24px}
+  input,select,textarea{font-family:inherit}
+  .field{background:var(--bg);border:1px solid var(--line);color:var(--txt);border-radius:10px;padding:10px 12px;font-size:14px;outline:none}
+  .field:focus{border-color:var(--accent)}
+  textarea.field{width:100%;min-height:110px;resize:vertical;line-height:1.5}
+  .btn{background:linear-gradient(135deg,var(--accent),#8a6bff);color:#fff;border:0;border-radius:10px;padding:10px 16px;font-weight:700;cursor:pointer;font-size:14px;font-family:inherit;transition:.15s}
+  .btn:hover{filter:brightness(1.08);transform:translateY(-1px)}
+  .btn.ghost{background:var(--card2);border:1px solid var(--line)}
+  .btn.sm{padding:7px 12px;font-size:13px;border-radius:9px}
+  .btn.good{background:linear-gradient(135deg,var(--accent2),#1fae86)}
+  .btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+  .controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:12px}
+  .speed{display:flex;align-items:center;gap:10px;background:var(--bg);border:1px solid var(--line);padding:8px 12px;border-radius:12px}
+  .speed input[type=range]{width:120px;accent-color:var(--accent2)}
+  .speed .val{font-weight:800;color:var(--accent2);min-width:42px;text-align:center}
+  .toggle{display:flex;align-items:center;gap:7px;background:var(--bg);border:1px solid var(--line);padding:8px 12px;border-radius:12px;cursor:pointer;user-select:none;font-size:13px}
+  .toggle.on{border-color:var(--accent2);color:var(--accent2)}
+  .toggle .sw{width:34px;height:18px;border-radius:20px;background:#3a4080;position:relative;transition:.2s}
+  .toggle.on .sw{background:var(--accent2)}
+  .toggle .sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:.2s}
+  .toggle.on .sw::after{left:18px}
+  .subPanel{max-height:430px;overflow-y:auto;padding-right:4px}
+  .subLine{display:flex;gap:10px;padding:11px 12px;border-radius:12px;margin-bottom:7px;cursor:pointer;border:1px solid transparent;transition:.12s;background:var(--bg)}
+  .subLine:hover{border-color:var(--line)}
+  .subLine.active{background:linear-gradient(135deg,rgba(108,139,255,.28),rgba(39,214,163,.15));border-color:var(--accent)}
+  .subLine .t{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;min-width:42px;padding-top:3px}
+  .subLine .en{font-size:16px;line-height:1.55}
+  .subLine .en w{cursor:pointer;border-radius:4px;padding:0 1px;transition:.1s}
+  .subLine .en w:hover{background:var(--warn);color:#222}
+  .subLine .zh{color:var(--muted);font-size:13px;margin-top:3px;display:none}
+  .subLine.showzh .zh{display:block}
+  .subLine .mini{display:flex;gap:6px;margin-top:8px}
+  .subLine .mini button{background:var(--card2);border:1px solid var(--line);color:var(--muted);border-radius:8px;padding:4px 9px;font-size:12px;cursor:pointer;font-family:inherit}
+  .subLine .mini button:hover{color:var(--txt);border-color:var(--accent)}
+  .hint{color:var(--muted);font-size:12.5px;line-height:1.6}
+  .vocabAdd{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .vocabAdd .field{flex:1;min-width:120px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:11px 10px;border-bottom:1px solid var(--line);font-size:14px}
+  th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+  td .w{font-weight:700;font-size:16px}
+  td .spk{background:transparent;border:0;cursor:pointer;font-size:15px;margin-left:6px;opacity:.7}
+  td .spk:hover{opacity:1}
+  .tag{display:inline-block;background:var(--card2);border:1px solid var(--line);color:var(--muted);font-size:11px;padding:2px 8px;border-radius:20px}
+  .del{background:transparent;border:0;color:var(--bad);cursor:pointer;font-size:18px;line-height:1}
+  .empty{text-align:center;color:var(--muted);padding:40px 10px}
+  .quizSetup{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .qprompt{font-size:15px;color:var(--muted);margin-bottom:6px}
+  .qword{font-size:30px;font-weight:800;letter-spacing:.5px;margin:6px 0 18px}
+  .opts{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  @media(max-width:560px){.opts{grid-template-columns:1fr}}
+  .opt{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:14px 16px;cursor:pointer;font-size:15px;transition:.12s;text-align:left;color:var(--txt);font-family:inherit}
+  .opt:hover{border-color:var(--accent)}
+  .opt.correct{background:rgba(39,214,163,.18);border-color:var(--good);color:#bff7e4}
+  .opt.wrong{background:rgba(255,107,138,.16);border-color:var(--bad);color:#ffd0da}
+  .opt:disabled{cursor:default}
+  .progress{height:8px;background:var(--bg);border-radius:20px;overflow:hidden;margin:14px 0;border:1px solid var(--line)}
+  .progress i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));width:0;transition:.3s}
+  .score{font-size:48px;font-weight:800;background:linear-gradient(135deg,var(--accent2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .tokens{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+  .token{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:9px 13px;cursor:pointer;font-size:15px;user-select:none}
+  .token:hover{border-color:var(--accent)}
+  .answerZone{min-height:54px;background:var(--bg);border:1px dashed var(--line);border-radius:12px;padding:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .answerZone .token{background:linear-gradient(135deg,var(--accent),#8a6bff);border:0}
+  .fbk{margin-top:14px;font-weight:700;font-size:15px}
+  .fbk.ok{color:var(--good)} .fbk.no{color:var(--bad)}
+  .blankInput{font-size:20px;letter-spacing:1px;width:100%;text-align:center;padding:14px;margin:10px 0}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .pill{background:var(--card2);border:1px solid var(--line);border-radius:20px;padding:6px 14px;font-size:13px;color:var(--muted)}
+  .pill b{color:var(--txt)}
+  .notice{background:rgba(255,180,84,.12);border:1px solid var(--warn);color:#ffe2b8;border-radius:12px;padding:12px 14px;font-size:13.5px;line-height:1.6}
+  details summary{cursor:pointer;color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="logo"><span class="dot"></span>EchoLearn</div>
+    <div class="sub">貼 YouTube 網址 · 邊看邊學 · 字幕同步跟讀</div>
+    <nav class="tabs">
+      <button data-tab="learn" class="active">學習</button>
+      <button data-tab="vocab">單字本</button>
+      <button data-tab="quiz">測驗</button>
+    </nav>
+  </header>
+
+  <div id="envBanner" class="banner"></div>
+
+  <!-- ============ LEARN ============ -->
+  <section id="learn" class="view active">
+    <div class="grid learn">
+      <!-- video column -->
+      <div class="card">
+        <div class="hd">🎬 YouTube 影片 <span class="pill" id="nowPlaying">示範影片</span></div>
+        <div class="bd">
+          <div class="urlbar">
+            <input class="field" id="ytInput" placeholder="貼上 YouTube 網址,例如 https://youtu.be/..." />
+            <button class="btn" id="loadBtn">載入影片</button>
+          </div>
+          <div class="videoBox"><div id="player"></div></div>
+
+          <div class="controls">
+            <div class="speed"><span>速度</span><input type="range" id="speed" min="0.5" max="2" step="0.25" value="1" /><span class="val" id="speedVal">1x</span></div>
+            <div class="toggle on" id="loopToggle"><span class="sw"></span><span>單句循環</span></div>
+            <div class="toggle" id="zhToggle"><span class="sw"></span><span>顯示中譯</span></div>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn ghost sm" id="prevLine">⏮ 上一句</button>
+            <button class="btn good sm" id="replayLine">🔁 重聽本句</button>
+            <button class="btn ghost sm" id="nextLine">下一句 ⏭</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- subtitle column -->
+      <div class="card">
+        <div class="hd">📝 字幕 / 跟讀 <span class="pill"><b id="lineCount">0</b> 句</span></div>
+        <div class="bd">
+          <p class="hint" style="margin:0 0 10px">影片播放時字幕自動高亮。點任一句 → 跳到該段跟讀;點<span style="color:var(--warn)">單字</span> → 加入單字本。</p>
+          <div class="subPanel" id="subPanel"></div>
+
+          <details style="margin-top:12px" id="transBox">
+            <summary>📋 貼上逐字稿 / 字幕(換新影片必做)</summary>
+            <p class="hint" style="margin:8px 0">在 YouTube 影片下方點「⋯ 更多 → 顯示轉錄稿(Show transcript)」,全選複製後貼到這裡,按「套用」。也支援 SRT / VTT 字幕檔內容。</p>
+            <textarea class="field" id="transInput" placeholder="0:00 Thank you. I'm honored to be with you today.&#10;0:14 at your commencement from one of the finest..."></textarea>
+            <div class="row" style="margin-top:8px">
+              <button class="btn sm" id="applyTrans">套用字幕</button>
+              <button class="btn ghost sm" id="clearTrans">清空</button>
+              <span class="hint" id="transMsg"></span>
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VOCAB ============ -->
+  <section id="vocab" class="view">
+    <div class="card">
+      <div class="hd">📚 我的單字本 <span class="pill"><b id="vCount">0</b> 字</span></div>
+      <div class="bd">
+        <div class="vocabAdd">
+          <input class="field" id="vWord" placeholder="單字 word" />
+          <input class="field" id="vMean" placeholder="中文意思" />
+          <input class="field" id="vNote" placeholder="例句 / 備註(選填)" />
+          <button class="btn" id="vAdd">＋ 加入</button>
+        </div>
+        <div id="vTableWrap"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ QUIZ ============ -->
+  <section id="quiz" class="view">
+    <div class="card">
+      <div class="hd">🎯 測驗</div>
+      <div class="bd" id="quizBody">
+        <div id="quizStart">
+          <div class="quizSetup">
+            <label class="hint">題型：</label>
+            <select class="field" id="qType">
+              <option value="mc">單字選擇題(英→中)</option>
+              <option value="dict">聽寫填空(影片字幕)</option>
+              <option value="reorder">句子重組(影片字幕)</option>
+            </select>
+            <select class="field" id="qLen">
+              <option value="5">5 題</option>
+              <option value="10">10 題</option>
+              <option value="all">全部</option>
+            </select>
+            <button class="btn" id="qStart">開始測驗</button>
+          </div>
+          <div id="quizNotice" style="margin-top:16px"></div>
+        </div>
+        <div id="quizRun" style="display:none">
+          <div class="row" style="justify-content:space-between">
+            <span class="pill">第 <b id="qNow">1</b> / <b id="qTotal">5</b> 題</span>
+            <span class="pill">得分 <b id="qScore">0</b></span>
+          </div>
+          <div class="progress"><i id="qBar"></i></div>
+          <div id="qContent"></div>
+          <div class="fbk" id="qFbk"></div>
+          <div class="row" style="margin-top:16px"><button class="btn" id="qNext" style="display:none">下一題 →</button></div>
+        </div>
+        <div id="quizEnd" style="display:none;text-align:center;padding:20px">
+          <div class="score" id="finalScore">0%</div>
+          <p id="finalMsg" style="font-size:17px;margin:8px 0 20px"></p>
+          <button class="btn" id="qRestart">再測一次</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+/* ============ 示範影片 + 字幕(Steve Jobs 史丹佛演講) ============ */
+const DEMO_VIDEO="UF8uR6Z6KLc";
+const DEMO_SUBS=[
+  {t:9,en:"Thank you. I'm honored to be with you today,",zh:"謝謝。今天能與各位同在,我深感榮幸,"},
+  {t:14,en:"at your commencement from one of the finest universities in the world.",zh:"在這所世界頂尖大學的畢業典禮上。"},
+  {t:21,en:"I never graduated from college.",zh:"我從沒從大學畢業。"},
+  {t:25,en:"Truth be told, this is the closest I've ever gotten to a college graduation.",zh:"老實說,這是我離大學畢業最近的一次。"},
+  {t:33,en:"Today I want to tell you three stories from my life.",zh:"今天我想說三個我人生中的故事。"},
+  {t:39,en:"That's it. No big deal. Just three stories.",zh:"就這樣,沒什麼大不了,只是三個故事。"},
+  {t:46,en:"The first story is about connecting the dots.",zh:"第一個故事是關於「串起生命中的點」。"},
+  {t:54,en:"I dropped out of Reed College after the first six months,",zh:"我念里德學院六個月後就退學了,"},
+  {t:61,en:"but then stayed around as a drop-in for another eighteen months or so before I really quit.",zh:"但之後又旁聽了大約十八個月才真正離開。"},
+  {t:71,en:"So why did I drop out?",zh:"那我為什麼退學呢?"},
+  {t:80,en:"You can't connect the dots looking forward;",zh:"你無法預先把這些點連起來;"},
+  {t:85,en:"you can only connect them looking backwards.",zh:"只有回頭看時才能把它們串起來。"},
+  {t:91,en:"So you have to trust that the dots will somehow connect in your future.",zh:"所以你必須相信,這些點會在未來以某種方式相連。"},
+  {t:108,en:"This approach has never let me down, and it has made all the difference in my life.",zh:"這個信念從未讓我失望,並徹底改變了我的人生。"}
+];
+const STOP=new Set("a an the and or but to of in on at is am are was were be been being i you he she it we they this that for with as from your my our his her its do not don't so why".split(" "));
+
+/* ============ 狀態 ============ */
+let player,ready=false,apiReady=false;
+let subs=DEMO_SUBS.map(s=>({...s}));
+let curLine=-1, loopOn=true, zhOn=false, rate=1;
+let curVideo=DEMO_VIDEO;
+let vocab=loadVocab();
+const synth=window.speechSynthesis||null; let enVoice=null;
+function loadVoices(){ if(!synth)return; const vs=synth.getVoices(); enVoice=vs.find(v=>/en[-_]US/i.test(v.lang))||vs.find(v=>/^en/i.test(v.lang))||null; }
+if(synth){ loadVoices(); synth.onvoiceschanged=loadVoices; }
+function say(w){ if(!synth)return; synth.cancel(); const u=new SpeechSynthesisUtterance(w); u.lang='en-US'; if(enVoice)u.voice=enVoice; synth.speak(u); }
+
+/* ============ 環境提示 ============ */
+(function envCheck(){
+  const b=document.getElementById('envBanner');
+  if(location.protocol==='file:'){
+    b.className='banner warn';
+    b.innerHTML='⚠️ 你正用「本機檔案」開啟,YouTube 可能顯示「錯誤 153」無法播放。請改用隨附的 <b>啟動 EchoLearn.bat</b>(以 http://localhost 開啟),或把本頁放到任一網頁伺服器。其餘功能(字幕、單字、測驗)不受影響。';
+  }else{
+    b.className='banner ok';
+    b.innerHTML='✅ 目前以 '+location.protocol+'//'+location.host+' 載入,YouTube 影片可正常播放。';
+  }
+})();
+
+/* ============ YouTube ============ */
+function onYouTubeIframeAPIReady(){ apiReady=true; createPlayer(curVideo); }
+function createPlayer(id){
+  if(!apiReady){ curVideo=id; return; }
+  ready=false;
+  player=new YT.Player('player',{
+    videoId:id, host:'https://www.youtube-nocookie.com',
+    playerVars:{rel:0,modestbranding:1,playsinline:1,origin:location.origin},
+    events:{ onReady:()=>{ready=true; if(player.setPlaybackRate)player.setPlaybackRate(rate);}, onError:e=>showErr(e.data) }
+  });
+}
+function showErr(code){
+  const box=document.querySelector('.videoBox');
+  box.innerHTML='<div class="ph"><div style="font-size:34px">📺</div><div style="font-weight:800;margin:8px 0 4px">影片無法播放(代碼 '+code+')</div><div class="hint" style="max-width:380px">'+
+    (location.protocol==='file:'?'請改用 <b>啟動 EchoLearn.bat</b> 以 http://localhost 開啟;':'此影片可能禁止內嵌或有地區/年齡限制,')+
+    '也可以換一支影片再試。</div></div>';
+}
+setInterval(()=>{
+  if(!ready||!player||!player.getCurrentTime) return;
+  let tt; try{ tt=player.getCurrentTime(); }catch(e){ return; }
+  if(!subs.length) return;
+  if(loopOn && curLine>=0){
+    const end=subs[curLine+1]?subs[curLine+1].t:subs[curLine].t+8;
+    if(tt>=end-0.05){ player.seekTo(subs[curLine].t,true); return; }
+  }
+  let idx=-1; for(let i=0;i<subs.length;i++){ if(tt>=subs[i].t-0.3) idx=i; else break; }
+  if(idx!==curLine) setActive(idx,false);
+},250);
+
+/* ============ 字幕 ============ */
+function fmt(sec){const m=Math.floor(sec/60),s=Math.floor(sec%60);return m+':'+String(s).padStart(2,'0');}
+function renderSubs(){
+  const p=document.getElementById('subPanel'); p.innerHTML='';
+  if(!subs.length){ p.innerHTML='<div class="empty">這支影片還沒有字幕。<br>展開下方「貼上逐字稿」把字幕貼進來即可同步。</div>'; document.getElementById('lineCount').textContent=0; return; }
+  subs.forEach((s,i)=>{
+    const div=document.createElement('div');
+    div.className='subLine'+(zhOn?' showzh':''); div.dataset.i=i;
+    const words=s.en.split(/(\s+)/).map(tok=>{ const clean=tok.replace(/[^A-Za-z'-]/g,''); if(clean&&!/^\s+$/.test(tok)){const idx=tok.indexOf(clean);return tok.slice(0,idx)+'<w data-w="'+clean.toLowerCase()+'">'+clean+'</w>'+tok.slice(idx+clean.length);} return tok; }).join('');
+    div.innerHTML='<div class="t">'+fmt(s.t)+'</div><div style="flex:1"><div class="en">'+words+'</div><div class="zh">'+(s.zh||'')+'</div>'+
+      '<div class="mini"><button data-act="play">▶ 跟讀此句</button><button data-act="add">＋整句生字</button></div></div>';
+    p.appendChild(div);
+  });
+  document.getElementById('lineCount').textContent=subs.length;
+}
+function setActive(i,seek){
+  curLine=i;
+  document.querySelectorAll('.subLine').forEach(el=>el.classList.toggle('active',+el.dataset.i===i));
+  const el=document.querySelector('.subLine[data-i="'+i+'"]'); if(el)el.scrollIntoView({block:'nearest',behavior:'smooth'});
+  if(seek&&ready&&i>=0){ player.seekTo(subs[i].t,true); player.playVideo(); }
+}
+document.getElementById('subPanel').addEventListener('click',e=>{
+  const w=e.target.closest('w'); if(w){ quickAddWord(w.dataset.w); return; }
+  const line=e.target.closest('.subLine'); if(!line)return;
+  const i=+line.dataset.i; const btn=e.target.closest('button[data-act]');
+  if(btn){ if(btn.dataset.act==='play')setActive(i,true); if(btn.dataset.act==='add')addLineWords(i); return; }
+  setActive(i,true);
+});
+
+/* ============ 逐字稿解析 ============ */
+function tsToSec(s){ const p=s.split(':').map(Number); if(p.some(isNaN))return null; if(p.length===3)return p[0]*3600+p[1]*60+p[2]; if(p.length===2)return p[0]*60+p[1]; return null; }
+function parseTranscript(text){
+  text=text.replace(/\r/g,'').trim(); if(!text)return [];
+  const out=[];
+  if(text.includes('-->')){ // SRT / VTT
+    const blocks=text.split(/\n\s*\n/);
+    blocks.forEach(b=>{
+      const m=b.match(/(\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?)\s*-->/);
+      if(!m)return;
+      const t=tsToSec(m[1].replace(/[.,]\d+/,''));
+      const lines=b.split('\n').filter(l=>!/-->/.test(l)&&!/^\d+$/.test(l.trim())&&!/^WEBVTT/i.test(l));
+      const en=lines.join(' ').trim();
+      if(t!=null&&en)out.push({t,en});
+    });
+    return out.sort((a,b)=>a.t-b.t);
+  }
+  const lines=text.split('\n').map(l=>l.trim()).filter(Boolean);
+  let pend=null;
+  const reOnly=/^(\d{1,2}:\d{2}(?::\d{2})?)$/;
+  const reInline=/^(\d{1,2}:\d{2}(?::\d{2})?)\s+(.*)$/;
+  lines.forEach(l=>{
+    let m;
+    if((m=l.match(reOnly))){ pend=tsToSec(m[1]); }
+    else if((m=l.match(reInline))){ out.push({t:tsToSec(m[1]),en:m[2].trim()}); pend=null; }
+    else if(pend!=null){ out.push({t:pend,en:l}); pend=null; }
+    else if(out.length){ out[out.length-1].en+=' '+l; }
+  });
+  return out.filter(o=>o.t!=null&&o.en).sort((a,b)=>a.t-b.t);
+}
+document.getElementById('applyTrans').addEventListener('click',()=>{
+  const parsed=parseTranscript(document.getElementById('transInput').value);
+  const msg=document.getElementById('transMsg');
+  if(!parsed.length){ msg.style.color='var(--bad)'; msg.textContent='解析不到時間碼,請確認有貼到含時間的逐字稿。'; return; }
+  subs=parsed; curLine=-1; renderSubs();
+  msg.style.color='var(--accent2)'; msg.textContent='已套用 '+parsed.length+' 句字幕 ✅';
+  document.getElementById('transBox').open=false;
+});
+document.getElementById('clearTrans').addEventListener('click',()=>{ document.getElementById('transInput').value=''; document.getElementById('transMsg').textContent=''; });
+
+/* ============ 單字 ============ */
+function addLineWords(i){ let n=0; subs[i].en.toLowerCase().split(/[^a-z'-]+/).forEach(w=>{ if(w.length>2&&!STOP.has(w)&&!vocab.some(v=>v.word===w)){ vocab.push({word:w,mean:'',note:subs[i].en,date:Date.now()}); n++; } }); saveVocab(); renderVocab(); toast(n?'已加入 '+n+' 個生字,記得到單字本補中文':'這句生字都已在單字本了'); }
+function quickAddWord(w){ if(vocab.some(v=>v.word===w)){ toast('「'+w+'」已在單字本'); return; } say(w); const mean=prompt('加入單字本:「'+w+'」\n請輸入中文意思(可留空):',''); if(mean===null)return; vocab.push({word:w,mean:mean.trim(),note:'',date:Date.now()}); saveVocab(); renderVocab(); toast('已加入「'+w+'」'); }
+
+/* ============ 控制 ============ */
+const speed=document.getElementById('speed');
+speed.addEventListener('input',()=>{ rate=parseFloat(speed.value); document.getElementById('speedVal').textContent=rate+'x'; if(ready&&player.setPlaybackRate)player.setPlaybackRate(rate); });
+document.getElementById('loopToggle').addEventListener('click',function(){ loopOn=!loopOn; this.classList.toggle('on',loopOn); });
+document.getElementById('zhToggle').addEventListener('click',function(){ zhOn=!zhOn; this.classList.toggle('on',zhOn); document.querySelectorAll('.subLine').forEach(el=>el.classList.toggle('showzh',zhOn)); });
+document.getElementById('replayLine').addEventListener('click',()=>setActive(curLine<0?0:curLine,true));
+document.getElementById('prevLine').addEventListener('click',()=>setActive(Math.max(0,curLine-1),true));
+document.getElementById('nextLine').addEventListener('click',()=>setActive(Math.min(subs.length-1,curLine+1),true));
+document.getElementById('loadBtn').addEventListener('click',()=>{
+  const id=parseYT(document.getElementById('ytInput').value.trim());
+  if(!id){ toast('看不懂這個 YouTube 連結'); return; }
+  curVideo=id;
+  if(player&&player.loadVideoById){ try{ player.loadVideoById(id); }catch(e){ createPlayer(id); } } else createPlayer(id);
+  subs=[]; curLine=-1; renderSubs();
+  document.getElementById('nowPlaying').textContent='自訂影片';
+  document.getElementById('transBox').open=true;
+  toast('影片已載入。請貼上逐字稿來同步字幕。');
+});
+function parseYT(u){ if(!u)return null; if(/^[\w-]{11}$/.test(u))return u; const m=u.match(/(?:v=|youtu\.be\/|embed\/|shorts\/|live\/)([\w-]{11})/); return m?m[1]:null; }
+
+/* ============ 單字本 ============ */
+function loadVocab(){ try{return JSON.parse(localStorage.getItem('echolearn_vocab'))||seedVocab();}catch(e){return seedVocab();} }
+function seedVocab(){ return [
+  {word:'honored',mean:'感到榮幸的',note:"I'm honored to be with you today.",date:1},
+  {word:'commencement',mean:'畢業典禮',note:'at your commencement',date:2},
+  {word:'graduate',mean:'畢業',note:'I never graduated from college.',date:3},
+  {word:'connect',mean:'連接;串起',note:'connecting the dots',date:4},
+  {word:'trust',mean:'相信;信任',note:'you have to trust...',date:5},
+  {word:'approach',mean:'方法;態度',note:'This approach has never let me down.',date:6}
+]; }
+function saveVocab(){ try{localStorage.setItem('echolearn_vocab',JSON.stringify(vocab));}catch(e){} document.getElementById('vCount').textContent=vocab.length; }
+function renderVocab(){
+  document.getElementById('vCount').textContent=vocab.length;
+  const wrap=document.getElementById('vTableWrap');
+  if(!vocab.length){ wrap.innerHTML='<div class="empty">單字本是空的。到「學習」頁點字幕裡的單字,或在上面手動加入。</div>'; return; }
+  let h='<table><thead><tr><th>單字</th><th>中文意思</th><th>例句 / 備註</th><th></th></tr></thead><tbody>';
+  vocab.slice().reverse().forEach(v=>{ const idx=vocab.indexOf(v);
+    h+='<tr><td><span class="w">'+esc(v.word)+'</span><button class="spk" data-spk="'+esc(v.word)+'" title="朗讀">🔊</button></td><td>'+(v.mean?esc(v.mean):'<span class="tag">待補</span>')+'</td><td style="color:var(--muted);font-size:13px">'+esc(v.note||'')+'</td><td><button class="del" data-del="'+idx+'" title="刪除">✕</button></td></tr>'; });
+  wrap.innerHTML=h+'</tbody></table>';
+}
+document.getElementById('vTableWrap').addEventListener('click',e=>{ const d=e.target.closest('[data-del]'); if(d){ vocab.splice(+d.dataset.del,1); saveVocab(); renderVocab(); return; } const s=e.target.closest('[data-spk]'); if(s)say(s.dataset.spk); });
+document.getElementById('vAdd').addEventListener('click',()=>{ const w=document.getElementById('vWord').value.trim().toLowerCase(),m=document.getElementById('vMean').value.trim(),n=document.getElementById('vNote').value.trim(); if(!w){ toast('請輸入單字'); return; } if(vocab.some(v=>v.word===w)){ toast('已存在'); return; } vocab.push({word:w,mean:m,note:n,date:Date.now()}); saveVocab(); renderVocab(); document.getElementById('vWord').value=document.getElementById('vMean').value=document.getElementById('vNote').value=''; });
+
+/* ============ 測驗 ============ */
+let quiz=null;
+document.getElementById('qStart').addEventListener('click',startQuiz);
+document.getElementById('qRestart').addEventListener('click',()=>{ show('quizStart'); checkQuizReady(); });
+document.getElementById('qNext').addEventListener('click',nextQ);
+document.getElementById('qType').addEventListener('change',checkQuizReady);
+function show(id){ ['quizStart','quizRun','quizEnd'].forEach(x=>document.getElementById(x).style.display=x===id?'block':'none'); }
+function checkQuizReady(){ const type=document.getElementById('qType').value,note=document.getElementById('quizNotice'),withMean=vocab.filter(v=>v.mean);
+  if(type==='mc') note.innerHTML=withMean.length<4?'<div class="notice">單字選擇題需至少 4 個有中文意思的單字,目前 '+withMean.length+' 個。</div>':'<div class="hint">可出題單字:'+withMean.length+' 個 ✅</div>';
+  else note.innerHTML='<div class="hint">使用影片字幕出題,共 '+subs.length+' 句可用'+(subs.length?' ✅':' —— 請先貼字幕')+'</div>'; }
+function startQuiz(){ const type=document.getElementById('qType').value,len=document.getElementById('qLen').value; let pool;
+  if(type==='mc'){ pool=shuffle(vocab.filter(v=>v.mean)); if(pool.length<4){ checkQuizReady(); return; } }
+  else{ pool=shuffle(subs.filter(s=>{const n=s.en.split(/\s+/).length;return n>=3&&n<=14;})); if(!pool.length){ document.getElementById('quizNotice').innerHTML='<div class="notice">沒有合適的字幕句可出題,請先在學習頁貼上字幕。</div>'; return; } }
+  const n=len==='all'?pool.length:Math.min(parseInt(len),pool.length);
+  quiz={type,items:pool.slice(0,n),idx:0,score:0}; document.getElementById('qTotal').textContent=quiz.items.length; show('quizRun'); renderQ(); }
+function playSeg(it){ if(ready&&player.seekTo){ player.seekTo(it.t,true); player.playVideo(); const idx=subs.indexOf(it); const end=subs[idx+1]?subs[idx+1].t:it.t+6; setTimeout(()=>{ if(ready)player.pauseVideo(); },Math.max(800,(end-it.t)*1000/rate)); } else say(it.en); }
+function renderQ(){
+  const c=document.getElementById('qContent'); document.getElementById('qFbk').textContent=''; document.getElementById('qNext').style.display='none';
+  document.getElementById('qNow').textContent=quiz.idx+1; document.getElementById('qScore').textContent=quiz.score; document.getElementById('qBar').style.width=(quiz.idx/quiz.items.length*100)+'%';
+  const it=quiz.items[quiz.idx];
+  if(quiz.type==='mc'){
+    const correct=it.mean,others=shuffle(vocab.filter(v=>v.mean&&v.mean!==correct)).slice(0,3).map(v=>v.mean),opts=shuffle([correct,...others]);
+    c.innerHTML='<div class="qprompt">這個單字的中文意思是?<button class="btn ghost sm" id="spkQ" style="margin-left:8px">🔊</button></div><div class="qword">'+esc(it.word)+'</div><div class="opts" id="opts"></div>';
+    document.getElementById('spkQ').onclick=()=>say(it.word);
+    const ob=document.getElementById('opts'); opts.forEach(o=>{ const b=document.createElement('button'); b.className='opt'; b.textContent=o; b.onclick=()=>pickMC(b,o,correct,ob); ob.appendChild(b); });
+  } else if(quiz.type==='dict'){
+    const words=it.en.split(/\s+/),cand=words.map((w,i)=>({w,i})).filter(o=>o.w.replace(/[^A-Za-z]/g,'').length>3),pick=cand[Math.floor(Math.random()*cand.length)]||{w:words[0],i:0};
+    quiz._ans=pick.w.replace(/[^A-Za-z'-]/g,'').toLowerCase();
+    const shown=words.map((w,i)=>i===pick.i?'<u style="color:var(--warn)">_____</u>':esc(w)).join(' ');
+    c.innerHTML='<div class="qprompt">▶ 看影片片段,填入空格單字</div><div style="font-size:18px;line-height:1.7;margin:10px 0">'+shown+'</div>'+(it.zh?'<div class="hint">提示:'+esc(it.zh)+'</div>':'')+'<input class="field blankInput" id="blankIn" placeholder="輸入單字" autocomplete="off" /><div class="row"><button class="btn ghost sm" id="playClip">▶ 播放此句</button><button class="btn sm" id="submitBlank">送出</button></div>';
+    document.getElementById('playClip').onclick=()=>playSeg(it); const inp=document.getElementById('blankIn'); inp.focus(); inp.addEventListener('keydown',e=>{if(e.key==='Enter')checkBlank();}); document.getElementById('submitBlank').onclick=checkBlank;
+  } else {
+    const words=it.en.replace(/[.,!?;:"]/g,'').split(/\s+/).filter(Boolean); quiz._target=words;
+    c.innerHTML='<div class="qprompt">把單字排成正確的句子'+(it.zh?'(意思:'+esc(it.zh)+')':'')+'</div><div class="answerZone" id="ansZone"></div><div class="tokens" id="tokens"></div><div class="row"><button class="btn ghost sm" id="resetR">↺ 重排</button><button class="btn ghost sm" id="hearR">▶ 看片段</button><button class="btn sm" id="checkR">檢查</button></div>';
+    buildTokens(shuffle(words.map((w,i)=>({w,id:i})))); document.getElementById('resetR').onclick=()=>buildTokens(shuffle(words.map((w,i)=>({w,id:i})))); document.getElementById('hearR').onclick=()=>playSeg(it); document.getElementById('checkR').onclick=checkReorder;
+  }
+}
+function buildTokens(list){ const tz=document.getElementById('tokens'),az=document.getElementById('ansZone'); az.innerHTML=''; tz.innerHTML=''; list.forEach(o=>{ const b=document.createElement('span'); b.className='token'; b.textContent=o.w; b.onclick=()=>{ if(b.parentElement===tz)az.appendChild(b); else tz.appendChild(b); }; tz.appendChild(b); }); }
+function pickMC(btn,chosen,correct,box){ [...box.children].forEach(b=>b.disabled=true); if(chosen===correct){ btn.classList.add('correct'); quiz.score++; feedback(true); } else{ btn.classList.add('wrong'); [...box.children].forEach(b=>{if(b.textContent===correct)b.classList.add('correct');}); feedback(false,correct); } }
+function checkBlank(){ const val=(document.getElementById('blankIn').value||'').trim().toLowerCase(); if(!val)return; document.getElementById('blankIn').disabled=true; document.getElementById('submitBlank').disabled=true; if(val===quiz._ans){ quiz.score++; feedback(true); } else feedback(false,quiz._ans); }
+function checkReorder(){ const got=[...document.getElementById('ansZone').children].map(c=>c.textContent).join(' ').toLowerCase(),want=quiz._target.join(' ').toLowerCase(); document.getElementById('checkR').disabled=true; if(got===want){ quiz.score++; feedback(true); } else feedback(false,quiz._target.join(' ')); }
+function feedback(ok,ans){ const f=document.getElementById('qFbk'); f.className='fbk '+(ok?'ok':'no'); f.textContent=ok?'✅ 答對了!':'❌ 正解:'+ans; document.getElementById('qScore').textContent=quiz.score; const nx=document.getElementById('qNext'); nx.style.display='inline-block'; nx.textContent=quiz.idx+1>=quiz.items.length?'看結果 →':'下一題 →'; }
+function nextQ(){ quiz.idx++; if(quiz.idx>=quiz.items.length){ endQuiz(); return; } renderQ(); }
+function endQuiz(){ show('quizEnd'); const pct=Math.round(quiz.score/quiz.items.length*100); document.getElementById('finalScore').textContent=pct+'%'; const msg=pct>=80?'太強了!🎉':pct>=50?'不錯,繼續加油 💪':'多看幾次影片再挑戰 📖'; document.getElementById('finalMsg').textContent='答對 '+quiz.score+' / '+quiz.items.length+' 題。'+msg; }
+
+/* ============ 分頁 ============ */
+document.querySelectorAll('nav.tabs button').forEach(b=>{ b.addEventListener('click',()=>{ document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); document.querySelectorAll('.view').forEach(v=>v.classList.remove('active')); document.getElementById(b.dataset.tab).classList.add('active'); if(b.dataset.tab==='vocab')renderVocab(); if(b.dataset.tab==='quiz')checkQuizReady(); }); });
+
+/* ============ 工具 ============ */
+function shuffle(a){a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
+function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+let toastTimer;
+function toast(msg){ let t=document.getElementById('toast'); if(!t){ t=document.createElement('div'); t.id='toast'; t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#232a66;border:1px solid var(--line);color:#fff;padding:12px 20px;border-radius:12px;box-shadow:var(--shadow);z-index:99;font-size:14px;max-width:90%;transition:opacity .3s'; document.body.appendChild(t); } t.textContent=msg; t.style.opacity='1'; clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.style.opacity='0',2600); }
+
+/* ============ 初始化 ============ */
+renderSubs(); renderVocab(); saveVocab();
+// 預先填入示範逐字稿,方便了解格式
+document.getElementById('transInput').value=DEMO_SUBS.map(s=>fmt(s.t)+' '+s.en).join('\n');
+</script>
+</body>
+</html>
