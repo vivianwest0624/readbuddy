@@ -371,6 +371,7 @@ document.getElementById('applyTrans').addEventListener('click',()=>{
   subs=parsed; curLine=-1; subOffset=0; document.getElementById('offVal').textContent='0.0s'; renderSubs();
   msg.style.color='var(--accent2)'; msg.textContent='已套用 '+parsed.length+' 句字幕 ✅';
   document.getElementById('transBox').open=false;
+  if(zhOn) translateAll();
 });
 document.getElementById('clearTrans').addEventListener('click',()=>{ document.getElementById('transInput').value=''; document.getElementById('transMsg').textContent=''; });
 
@@ -385,7 +386,27 @@ function setOffset(d){ subOffset=Math.round((subOffset+d)*10)/10; document.getEl
 document.getElementById('offMinus').addEventListener('click',()=>setOffset(-0.5));
 document.getElementById('offPlus').addEventListener('click',()=>setOffset(0.5));
 document.getElementById('loopToggle').addEventListener('click',function(){ loopOn=!loopOn; this.classList.toggle('on',loopOn); });
-document.getElementById('zhToggle').addEventListener('click',function(){ zhOn=!zhOn; this.classList.toggle('on',zhOn); document.querySelectorAll('.subLine').forEach(el=>el.classList.toggle('showzh',zhOn)); });
+document.getElementById('zhToggle').addEventListener('click',async function(){ zhOn=!zhOn; this.classList.toggle('on',zhOn); document.querySelectorAll('.subLine').forEach(el=>el.classList.toggle('showzh',zhOn)); if(zhOn && subs.some(s=>!s.zh && s.en)) await translateAll(); });
+let translating=false;
+async function translateText(q){
+  q=(q||'').slice(0,480);
+  const url='https://api.mymemory.translated.net/get?q='+encodeURIComponent(q)+'&langpair=en|zh-TW';
+  const r=await fetch(url); const d=await r.json();
+  return (d&&d.responseData&&d.responseData.translatedText)||'';
+}
+async function translateAll(){
+  if(translating) return; translating=true;
+  const todo=subs.map((s,i)=>i).filter(i=>!subs[i].zh && subs[i].en);
+  if(!todo.length){ translating=false; return; }
+  let done=0, fail=0;
+  for(const i of todo){
+    toast('翻譯中譯… '+(++done)+'/'+todo.length);
+    try{ const z=await translateText(subs[i].en); subs[i].zh=z; }catch(e){ subs[i].zh=''; fail++; }
+    const el=document.querySelector('.subLine[data-i="'+i+'"] .zh'); if(el){ el.textContent=subs[i].zh; el.style.display=zhOn?'block':'none'; }
+  }
+  translating=false;
+  toast(fail? '中譯完成(部分未成功,可再試一次)':'中譯完成 ✅');
+}
 document.getElementById('replayLine').addEventListener('click',()=>setActive(curLine<0?0:curLine,true));
 document.getElementById('prevLine').addEventListener('click',()=>setActive(Math.max(0,curLine-1),true));
 document.getElementById('nextLine').addEventListener('click',()=>setActive(Math.min(subs.length-1,curLine+1),true));
