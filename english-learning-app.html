@@ -113,6 +113,12 @@
   .pill b{color:var(--txt)}
   .notice{background:rgba(255,180,84,.12);border:1px solid var(--warn);color:#ffe2b8;border-radius:12px;padding:12px 14px;font-size:13.5px;line-height:1.6}
   details summary{cursor:pointer;color:var(--muted);font-size:13px}
+  .libGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}
+  .libCard{display:flex;flex-direction:column;background:var(--bg);border:1px solid var(--line);border-radius:14px;overflow:hidden;transition:.12s}
+  .libCard:hover{border-color:var(--accent)}
+  .libCard img{width:100%;aspect-ratio:16/9;object-fit:cover;background:#000;cursor:pointer}
+  .libCard .libInfo{padding:10px 12px}
+  .libTitle{font-weight:700;font-size:14px;margin-bottom:4px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 </style>
 </head>
 <body>
@@ -122,6 +128,7 @@
     <div class="sub">貼 YouTube 網址 · 邊看邊學 · 字幕同步跟讀</div>
     <nav class="tabs">
       <button data-tab="learn" class="active">學習</button>
+      <button data-tab="library">影片庫</button>
       <button data-tab="vocab">單字本</button>
       <button data-tab="quiz">測驗</button>
     </nav>
@@ -174,6 +181,16 @@
             </div>
           </details>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ LIBRARY ============ -->
+  <section id="library" class="view">
+    <div class="card">
+      <div class="hd">🎞️ 影片庫 <span class="pill">看過的影片自動記錄,點一下即可開啟、字幕自動還原</span></div>
+      <div class="bd">
+        <div class="libGrid" id="libWrap"></div>
       </div>
     </div>
   </section>
@@ -260,6 +277,7 @@ let subs=DEMO_SUBS.map(s=>({...s}));
 let curLine=-1, loopOn=false, zhOn=false, rate=1, subOffset=0;
 let curVideo=DEMO_VIDEO;
 let vocab=loadVocab();
+let library=loadLibrary();
 const synth=window.speechSynthesis||null; let enVoice=null;
 function loadVoices(){ if(!synth)return; const vs=synth.getVoices(); enVoice=vs.find(v=>/en[-_]US/i.test(v.lang))||vs.find(v=>/^en/i.test(v.lang))||null; }
 if(synth){ loadVoices(); synth.onvoiceschanged=loadVoices; }
@@ -286,7 +304,7 @@ function createPlayer(id){
   player=new YT.Player('player',{
     videoId:id, host:'https://www.youtube-nocookie.com',
     playerVars:{rel:0,modestbranding:1,playsinline:1,iv_load_policy:3,origin:location.origin},
-    events:{ onReady:()=>{ready=true; if(player.setPlaybackRate)player.setPlaybackRate(rate);}, onError:e=>showErr(e.data) }
+    events:{ onReady:()=>{ready=true; if(player.setPlaybackRate)player.setPlaybackRate(rate); try{const vd=player.getVideoData(); if(vd&&vd.title){ document.getElementById('nowPlaying').textContent=vd.title; if(library[curVideo]){library[curVideo].title=vd.title;saveLibrary();} saveCurrentVideo(vd.title); }}catch(e){} }, onError:e=>showErr(e.data) }
   });
 }
 function showErr(code){
@@ -371,6 +389,7 @@ document.getElementById('applyTrans').addEventListener('click',()=>{
   subs=parsed; curLine=-1; subOffset=0; document.getElementById('offVal').textContent='0.0s'; renderSubs();
   msg.style.color='var(--accent2)'; msg.textContent='已套用 '+parsed.length+' 句字幕 ✅';
   document.getElementById('transBox').open=false;
+  saveCurrentVideo();
   if(zhOn) translateAll();
 });
 document.getElementById('clearTrans').addEventListener('click',()=>{ document.getElementById('transInput').value=''; document.getElementById('transMsg').textContent=''; });
@@ -405,6 +424,7 @@ async function translateAll(){
     const el=document.querySelector('.subLine[data-i="'+i+'"] .zh'); if(el){ el.textContent=subs[i].zh; el.style.display=zhOn?'block':'none'; }
   }
   translating=false;
+  saveCurrentVideo();
   toast(fail? '中譯完成(部分未成功,可再試一次)':'中譯完成 ✅');
 }
 document.getElementById('replayLine').addEventListener('click',()=>setActive(curLine<0?0:curLine,true));
@@ -413,14 +433,56 @@ document.getElementById('nextLine').addEventListener('click',()=>setActive(Math.
 document.getElementById('loadBtn').addEventListener('click',()=>{
   const id=parseYT(document.getElementById('ytInput').value.trim());
   if(!id){ toast('看不懂這個 YouTube 連結'); return; }
-  curVideo=id;
-  if(player&&player.loadVideoById){ try{ player.loadVideoById(id); }catch(e){ createPlayer(id); } } else createPlayer(id);
-  subs=[]; curLine=-1; subOffset=0; document.getElementById('offVal').textContent='0.0s'; renderSubs();
-  document.getElementById('nowPlaying').textContent='自訂影片';
-  document.getElementById('transBox').open=true;
-  toast('影片已載入。請貼上逐字稿來同步字幕。');
+  openVideo(id);
+  document.getElementById('ytInput').value='';
 });
 function parseYT(u){ if(!u)return null; if(/^[\w-]{11}$/.test(u))return u; const m=u.match(/(?:v=|youtu\.be\/|embed\/|shorts\/|live\/)([\w-]{11})/); return m?m[1]:null; }
+function openVideo(id){
+  curVideo=id;
+  if(player&&player.loadVideoById){ try{ player.loadVideoById(id); }catch(e){ createPlayer(id); } } else createPlayer(id);
+  subOffset=0; document.getElementById('offVal').textContent='0.0s'; curLine=-1;
+  const e=library[id];
+  if(e&&e.subs&&e.subs.length){
+    subs=e.subs.map(s=>({...s})); renderSubs();
+    document.getElementById('nowPlaying').textContent=e.title||'已存影片';
+    document.getElementById('transBox').open=false;
+    toast('已還原這支影片的字幕,免重貼 ✅');
+  }else{
+    subs=[]; renderSubs();
+    document.getElementById('nowPlaying').textContent='自訂影片';
+    document.getElementById('transBox').open=true;
+    toast('影片已載入。請貼上逐字稿來同步字幕。');
+  }
+}
+
+/* ============ 影片庫 ============ */
+function loadLibrary(){ try{return JSON.parse(localStorage.getItem('echolearn_library'))||{};}catch(e){return {};} }
+function saveLibrary(){ try{localStorage.setItem('echolearn_library',JSON.stringify(library));}catch(e){} }
+function saveCurrentVideo(title){
+  if(!curVideo || !subs.length) return;
+  const prev=library[curVideo]||{};
+  library[curVideo]={ id:curVideo, title:title||prev.title||'', subs:subs.map(s=>({t:s.t,en:s.en,zh:s.zh||''})), updatedAt:Date.now() };
+  saveLibrary();
+}
+function renderLibrary(){
+  const wrap=document.getElementById('libWrap');
+  const ids=Object.keys(library).sort((a,b)=>(library[b].updatedAt||0)-(library[a].updatedAt||0));
+  if(!ids.length){ wrap.innerHTML='<div class="empty">還沒有記錄。在「學習」載入影片並貼上字幕後,會自動存到這裡,下次點一下就能直接開、字幕自動還原。</div>'; return; }
+  wrap.innerHTML=ids.map(id=>{ const e=library[id]; const n=e.subs?e.subs.length:0;
+    return '<div class="libCard" data-id="'+id+'"><img data-act="load" src="https://i.ytimg.com/vi/'+id+'/mqdefault.jpg" alt="" />'+
+      '<div class="libInfo"><div class="libTitle">'+esc(e.title||id)+'</div>'+
+      '<div class="hint">'+n+' 句字幕 · '+new Date(e.updatedAt||Date.now()).toLocaleDateString()+'</div>'+
+      '<div class="row" style="margin-top:8px"><button class="btn sm" data-act="load">▶ 開啟</button><button class="btn ghost sm" data-act="del">刪除</button></div>'+
+      '</div></div>';
+  }).join('');
+}
+document.getElementById('libWrap').addEventListener('click',e=>{
+  const card=e.target.closest('.libCard'); if(!card)return; const id=card.dataset.id;
+  const act=e.target.closest('[data-act]'); if(!act)return;
+  if(act.dataset.act==='del'){ if(confirm('從影片庫刪除這支影片?(字幕記錄會一併刪除)')){ delete library[id]; saveLibrary(); renderLibrary(); } return; }
+  document.querySelector('nav.tabs button[data-tab="learn"]').click();
+  openVideo(id);
+});
 
 /* ============ 單字本 ============ */
 function loadVocab(){ try{return JSON.parse(localStorage.getItem('echolearn_vocab'))||seedVocab();}catch(e){return seedVocab();} }
@@ -491,7 +553,7 @@ function nextQ(){ quiz.idx++; if(quiz.idx>=quiz.items.length){ endQuiz(); return
 function endQuiz(){ show('quizEnd'); const pct=Math.round(quiz.score/quiz.items.length*100); document.getElementById('finalScore').textContent=pct+'%'; const msg=pct>=80?'太強了!🎉':pct>=50?'不錯,繼續加油 💪':'多看幾次影片再挑戰 📖'; document.getElementById('finalMsg').textContent='答對 '+quiz.score+' / '+quiz.items.length+' 題。'+msg; }
 
 /* ============ 分頁 ============ */
-document.querySelectorAll('nav.tabs button').forEach(b=>{ b.addEventListener('click',()=>{ document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); document.querySelectorAll('.view').forEach(v=>v.classList.remove('active')); document.getElementById(b.dataset.tab).classList.add('active'); if(b.dataset.tab==='vocab')renderVocab(); if(b.dataset.tab==='quiz')checkQuizReady(); }); });
+document.querySelectorAll('nav.tabs button').forEach(b=>{ b.addEventListener('click',()=>{ document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); document.querySelectorAll('.view').forEach(v=>v.classList.remove('active')); document.getElementById(b.dataset.tab).classList.add('active'); if(b.dataset.tab==='vocab')renderVocab(); if(b.dataset.tab==='quiz')checkQuizReady(); if(b.dataset.tab==='library')renderLibrary(); }); });
 
 /* ============ 工具 ============ */
 function shuffle(a){a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
@@ -501,6 +563,7 @@ function toast(msg){ let t=document.getElementById('toast'); if(!t){ t=document.
 
 /* ============ 初始化 ============ */
 renderSubs(); renderVocab(); saveVocab();
+if(!library[curVideo]) saveCurrentVideo('Steve Jobs 史丹佛演講(示範)');
 document.getElementById('transInput').value=DEMO_SUBS.map(s=>fmt(s.t)+' '+s.en).join('\n');
 </script>
 </body>
